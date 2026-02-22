@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Polyagentic Dashboard</title>
+    <link rel="stylesheet" href="/static/css/main.css">
+    <link rel="stylesheet" href="/static/css/dashboard.css">
+</head>
+<body>
+    <header class="header">
+        <div class="header__left">
+            <h1 class="header__title">POLYAGENTIC</h1>
+            <div class="project-selector">
+                <select id="project-select" class="project-selector__select"></select>
+                <button class="project-selector__btn" id="new-project-btn">+ New</button>
+            </div>
+        </div>
+        <div class="header__actions">
+            <button class="header__btn" id="team-config-btn">Team Config</button>
+            <span class="header__status" id="connection-status">Connecting...</span>
+        </div>
+    </header>
+
+    <main class="dashboard">
+        <section class="panel panel--agents" id="agents-panel">
+            <h2 class="panel__title">Agents</h2>
+            <div class="panel__content" id="agents-list"></div>
+        </section>
+
+        <section class="panel panel--tasks" id="tasks-panel">
+            <h2 class="panel__title">Tasks</h2>
+            <div class="panel__content" id="task-board"></div>
+        </section>
+
+        <section class="panel panel--chat" id="chat-panel">
+            <h2 class="panel__title">Chat</h2>
+            <div class="panel__content" id="chat-messages"></div>
+            <div class="chat-input">
+                <textarea id="chat-input" placeholder="Talk to the Development Manager..." rows="2"></textarea>
+                <button id="chat-send">Send</button>
+            </div>
+        </section>
+
+        <section class="panel panel--activity" id="activity-panel">
+            <h2 class="panel__title">Activity Log</h2>
+            <div class="panel__content" id="activity-log"></div>
+        </section>
+
+        <section class="panel panel--knowledge" id="knowledge-panel">
+            <h2 class="panel__title">Knowledge Base</h2>
+            <div class="panel__content" id="knowledge-list"></div>
+        </section>
+
+        <section class="panel panel--git" id="git-panel">
+            <h2 class="panel__title">Git</h2>
+            <div class="panel__content" id="git-info"></div>
+        </section>
+    </main>
+
+    <!-- Team Configuration Modal -->
+    <div class="modal-overlay" id="team-config-modal">
+        <div class="modal">
+            <div class="modal__header">
+                <h2 class="modal__title">Team Configuration</h2>
+                <button class="modal__close" id="team-config-close">&times;</button>
+            </div>
+            <div class="modal__body">
+                <div class="modal__section">
+                    <h3 class="modal__section-title">Current Team</h3>
+                    <div id="team-agent-list"></div>
+                </div>
+                <div class="modal__section">
+                    <h3 class="modal__section-title">Add New Agent</h3>
+                    <form id="add-agent-form" class="agent-form">
+                        <div class="form-group">
+                            <label>Agent ID</label>
+                            <input type="text" id="agent-name" placeholder="e.g. frontend_developer" pattern="[a-z_]+" required>
+                            <span class="form-hint">lowercase, underscores only</span>
+                        </div>
+                        <div class="form-group">
+                            <label>Role</label>
+                            <input type="text" id="agent-role" placeholder="e.g. Senior Frontend Developer" required>
+                        </div>
+                        <div class="form-group">
+                            <label>System Prompt</label>
+                            <textarea id="agent-system-prompt" rows="3" placeholder="You are an expert frontend developer..."></textarea>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Model</label>
+                                <select id="agent-model">
+                                    <option value="sonnet" selected>Sonnet</option>
+                                    <option value="opus">Opus</option>
+                                    <option value="haiku">Haiku</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>Tools</label>
+                                <select id="agent-tools">
+                                    <option value="Bash,Edit,Write,Read,Glob,Grep">Full Dev (read/write)</option>
+                                    <option value="Read,Glob,Grep">Read-only</option>
+                                    <option value="Bash,Read,Glob,Grep">Read + Shell</option>
+                                </select>
+                            </div>
+                        </div>
+                        <button type="submit" class="btn btn--primary">Add Agent</button>
+                        <div id="add-agent-status" class="form-status"></div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- New Project Modal -->
+    <div class="modal-overlay" id="new-project-modal">
+        <div class="modal">
+            <div class="modal__header">
+                <h2 class="modal__title">New Project</h2>
+                <button class="modal__close" id="new-project-close">&times;</button>
+            </div>
+            <div class="modal__body">
+                <form id="new-project-form" class="agent-form">
+                    <div class="form-group">
+                        <label>Project Name</label>
+                        <input type="text" id="new-project-name" placeholder="e.g. My Awesome App" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Description</label>
+                        <textarea id="new-project-description" rows="4" placeholder="Describe your project..."></textarea>
+                    </div>
+                    <button type="submit" class="btn btn--primary">Create Project</button>
+                    <div id="new-project-status" class="form-status"></div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Memory Viewer Modal -->
+    <div class="modal-overlay" id="memory-modal">
+        <div class="modal">
+            <div class="modal__header">
+                <h2 class="modal__title" id="memory-modal-title">Agent Memory</h2>
+                <button class="modal__close" id="memory-modal-close">&times;</button>
+            </div>
+            <div class="modal__body">
+                <div class="modal__section">
+                    <h3 class="modal__section-title">Personality & Skills</h3>
+                    <div id="memory-personality" class="memory-content">No personality memory recorded.</div>
+                </div>
+                <div class="modal__section">
+                    <h3 class="modal__section-title">Project Memory</h3>
+                    <div id="memory-project" class="memory-content">No project memory recorded.</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Task Detail Modal -->
+    <div class="modal-overlay" id="task-detail-modal">
+        <div class="modal modal--task-detail">
+            <div class="modal__header">
+                <div class="modal__header-left">
+                    <h2 class="modal__title" id="task-detail-title">Task Details</h2>
+                    <span class="task-detail__status" id="task-detail-status"></span>
+                </div>
+                <button class="modal__close" id="task-detail-close">&times;</button>
+            </div>
+            <div class="modal__body" id="task-detail-body">
+                <!-- Dynamically populated -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Knowledge Base Viewer Modal -->
+    <div class="modal-overlay" id="kb-viewer-modal">
+        <div class="modal modal--kb-viewer">
+            <div class="modal__header">
+                <h2 class="modal__title">Knowledge Base</h2>
+                <button class="modal__close" id="kb-viewer-close">&times;</button>
+            </div>
+            <div class="kb-viewer__body">
+                <aside class="kb-viewer__sidebar" id="kb-viewer-sidebar"></aside>
+                <main class="kb-viewer__canvas" id="kb-viewer-canvas">
+                    <div class="kb-viewer__empty">Select a document to view</div>
+                </main>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/marked@15.0.4/marked.min.js"></script>
+    <script src="/static/js/components/projectSelector.js"></script>
+    <script src="/static/js/components/agentPanel.js"></script>
+    <script src="/static/js/components/taskBoard.js"></script>
+    <script src="/static/js/components/chatView.js"></script>
+    <script src="/static/js/components/activityLog.js"></script>
+    <script src="/static/js/components/gitPanel.js"></script>
+    <script src="/static/js/components/knowledgePanel.js"></script>
+    <script src="/static/js/components/teamConfig.js"></script>
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,63 @@
+from __future__ import annotations
+
+import uuid
+from dataclasses import dataclass, field, asdict
+from datetime import datetime, timezone
+from enum import Enum
+
+
+class TaskStatus(str, Enum):
+    PENDING = "pending"
+    IN_PROGRESS = "in_progress"
+    REVIEW = "review"
+    BLOCKED = "blocked"
+    PAUSED = "paused"
+    DONE = "done"
+
+
+@dataclass
+class Task:
+    title: str
+    description: str
+    created_by: str
+    id: str = field(default_factory=lambda: f"task-{uuid.uuid4().hex[:8]}")
+    status: TaskStatus = TaskStatus.PENDING
+    assignee: str | None = None
+    role: str | None = None  # target role for unassigned tasks (e.g. "backend_developer")
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    updated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    priority: int = 3  # 1=critical, 2=high, 3=medium, 4=low, 5=backlog
+    labels: list[str] = field(default_factory=list)  # e.g. ["phase-1", "documentation"]
+    reviewer: str | None = None
+    paused_summary: str | None = None
+    outcome: str | None = None  # "approved", "rejected", "complete" — set when task moves to done
+    branch: str | None = None
+    parent_task_id: str | None = None
+    subtasks: list[str] = field(default_factory=list)
+    messages: list[str] = field(default_factory=list)
+    progress_notes: list[dict] = field(default_factory=list)
+    completion_summary: str | None = None
+    review_output: str | None = None
+
+    def to_dict(self) -> dict:
+        d = asdict(self)
+        d["status"] = self.status.value
+        return d
+
+    @classmethod
+    def from_dict(cls, data: dict) -> Task:
+        data = data.copy()
+        data["status"] = TaskStatus(data["status"])
+        data.setdefault("priority", 3)
+        data.setdefault("role", None)
+        data.setdefault("labels", [])
+        data.setdefault("reviewer", None)
+        data.setdefault("paused_summary", None)
+        data.setdefault("outcome", None)
+        data.setdefault("progress_notes", [])
+        data.setdefault("completion_summary", None)
+        data.setdefault("review_output", None)
+        return cls(**data)
+
+    def touch(self):
+        self.updated_at = datetime.now(timezone.utc).isoformat()

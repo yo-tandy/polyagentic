@@ -1,0 +1,149 @@
+const AgentPanel = {
+    container: null,
+    selectedAgent: null,
+
+    init(containerId) {
+        this.container = document.getElementById(containerId);
+
+        // Memory modal close handler
+        const closeBtn = document.getElementById('memory-modal-close');
+        if (closeBtn) closeBtn.addEventListener('click', () => this._hideMemoryModal());
+
+        const overlay = document.getElementById('memory-modal');
+        if (overlay) {
+            overlay.addEventListener('click', (e) => {
+                if (e.target === overlay) this._hideMemoryModal();
+            });
+        }
+    },
+
+    render(agents) {
+        if (!this.container) return;
+        this.container.innerHTML = agents.map(a => `
+            <div class="agent-card" data-agent-id="${a.id}">
+                <div class="agent-card__header">
+                    <div class="agent-card__info">
+                        <div class="agent-card__name">${a.name}</div>
+                        <div class="agent-card__role">${a.role}</div>
+                    </div>
+                    <div class="agent-card__actions">
+                        <button class="agent-card__memory-btn" data-agent-id="${a.id}" title="View agent memory">M</button>
+                        <button class="agent-card__status-btn" data-agent-id="${a.id}" title="Request status report">?</button>
+                    </div>
+                </div>
+                <span class="agent-card__status status--${a.status}">${a.status}</span>
+            </div>
+        `).join('');
+
+        // Bind click handlers for agent selection
+        this.container.querySelectorAll('.agent-card').forEach(card => {
+            card.addEventListener('click', (e) => {
+                // Don't trigger selection if clicking buttons
+                if (e.target.closest('.agent-card__status-btn') || e.target.closest('.agent-card__memory-btn')) return;
+                const agentId = card.dataset.agentId;
+                this._toggleSelect(agentId);
+            });
+        });
+
+        // Bind status button handlers
+        this.container.querySelectorAll('.agent-card__status-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const agentId = btn.dataset.agentId;
+                this._requestStatus(agentId, btn);
+            });
+        });
+
+        // Bind memory button handlers
+        this.container.querySelectorAll('.agent-card__memory-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const agentId = btn.dataset.agentId;
+                this._showMemory(agentId);
+            });
+        });
+
+        // Re-apply selection state
+        if (this.selectedAgent) {
+            const card = this.container.querySelector(`[data-agent-id="${this.selectedAgent}"]`);
+            if (card) card.classList.add('agent-card--selected');
+        }
+    },
+
+    _toggleSelect(agentId) {
+        // Deselect previous
+        if (this.selectedAgent) {
+            const prev = this.container.querySelector(`[data-agent-id="${this.selectedAgent}"]`);
+            if (prev) prev.classList.remove('agent-card--selected');
+        }
+
+        if (this.selectedAgent === agentId) {
+            // Clicking same agent deselects
+            this.selectedAgent = null;
+            TaskBoard.clearHighlight();
+        } else {
+            this.selectedAgent = agentId;
+            const card = this.container.querySelector(`[data-agent-id="${agentId}"]`);
+            if (card) card.classList.add('agent-card--selected');
+            TaskBoard.highlightByAssignee(agentId);
+        }
+    },
+
+    async _requestStatus(agentId, btn) {
+        btn.disabled = true;
+        btn.textContent = '...';
+        try {
+            await fetch(`/api/agents/${agentId}/status-request`, { method: 'POST' });
+        } catch (err) {
+            console.error('Status request failed:', err);
+        }
+        setTimeout(() => {
+            btn.disabled = false;
+            btn.textContent = '?';
+        }, 3000);
+    },
+
+    async _showMemory(agentId) {
+        const titleEl = document.getElementById('memory-modal-title');
+        const personalityEl = document.getElementById('memory-personality');
+        const projectEl = document.getElementById('memory-project');
+
+        if (titleEl) titleEl.textContent = `Memory: ${agentId}`;
+        if (personalityEl) personalityEl.textContent = 'Loading...';
+        if (projectEl) projectEl.textContent = 'Loading...';
+
+        // Show modal
+        const modal = document.getElementById('memory-modal');
+        if (modal) modal.classList.add('active');
+
+        // Fetch memory
+        try {
+            const res = await safeFetch(`/api/memory/${agentId}`, {});
+            if (personalityEl) {
+                personalityEl.textContent = res.personality || 'No personality memory recorded.';
+            }
+            if (projectEl) {
+                projectEl.textContent = res.project || 'No project memory recorded.';
+            }
+        } catch (err) {
+            console.error('Failed to load memory:', err);
+            if (personalityEl) personalityEl.textContent = 'Failed to load.';
+            if (projectEl) projectEl.textContent = 'Failed to load.';
+        }
+    },
+
+    _hideMemoryModal() {
+        const modal = document.getElementById('memory-modal');
+        if (modal) modal.classList.remove('active');
+    },
+
+    updateStatus(agentId, status) {
+        const card = this.container?.querySelector(`[data-agent-id="${agentId}"]`);
+        if (!card) return;
+        const badge = card.querySelector('.agent-card__status');
+        if (badge) {
+            badge.className = `agent-card__status status--${status}`;
+            badge.textContent = status;
+        }
+    }
+};

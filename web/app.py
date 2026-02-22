@@ -1,0 +1,53 @@
+from __future__ import annotations
+
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+
+from web.routes import chat, agents, tasks, activity, git, config, ws, projects, knowledge, memory
+
+STATIC_DIR = Path(__file__).parent / "static"
+
+
+def create_app(
+    app_state: dict,
+    project_store=None,
+    lifecycle_manager=None,
+) -> FastAPI:
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        app.state.registry = app_state["registry"]
+        app.state.broker = app_state["broker"]
+        app.state.task_board = app_state["task_board"]
+        app.state.git_manager = app_state["git_manager"]
+        app.state.team_config = app_state["team_config"]
+        app.state.session_store = app_state["session_store"]
+        app.state.memory_manager = app_state.get("memory_manager")
+        app.state.knowledge_base = app_state.get("knowledge_base")
+        app.state.project_store = project_store
+        app.state.lifecycle_manager = lifecycle_manager
+        yield
+
+    app = FastAPI(title="Polyagentic", lifespan=lifespan)
+
+    app.include_router(chat.router, prefix="/api")
+    app.include_router(agents.router, prefix="/api")
+    app.include_router(tasks.router, prefix="/api")
+    app.include_router(activity.router, prefix="/api")
+    app.include_router(git.router, prefix="/api")
+    app.include_router(config.router, prefix="/api")
+    app.include_router(projects.router, prefix="/api")
+    app.include_router(knowledge.router, prefix="/api")
+    app.include_router(memory.router, prefix="/api")
+    app.include_router(ws.router)
+
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+    @app.get("/")
+    async def index():
+        return FileResponse(str(STATIC_DIR / "index.html"))
+
+    return app

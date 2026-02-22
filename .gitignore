@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+messages/
+worktrees/
+workspace/
+logs/
+sessions.json
+tasks.json
+.claude/
+projects/
+projects.json
+memory/

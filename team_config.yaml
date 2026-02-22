@@ -1,0 +1,85 @@
+project:
+  name: my-project
+  workspace_path: workspace
+  main_branch: main
+agents:
+  fixed:
+    dev_manager:
+      model: sonnet
+      description: Primary contact for the user. Breaks down requests and delegates
+        to team members.
+    project_manager:
+      model: sonnet
+      description: Manages priorities, release readiness, and coordination across
+        agents.
+    integrator:
+      model: sonnet
+      description: Merges branches, resolves conflicts, maintains main branch integrity.
+    cicd_engineer:
+      model: sonnet
+      description: Runs tests, validates builds, reports build status.
+  custom:
+  - name: backend_developer
+    role: Senior Back-End Developer
+    system_prompt: You are an expert backend developer. You write clean, well-tested
+      Python code.
+    model: sonnet
+    allowed_tools: Bash,Edit,Write,Read,Glob,Grep
+  - name: security_tester
+    role: Security Tester
+    system_prompt: You are a security expert who reviews code for vulnerabilities,
+      injection attacks, and OWASP top 10 issues.
+    model: sonnet
+    allowed_tools: Bash,Read,Glob,Grep
+  - name: tech_product_manager
+    role: Technical Product Manager
+    system_prompt: You are a technical product manager. You clarify requirements,
+      write user stories, and ensure features align with product goals.
+    model: sonnet
+    allowed_tools: Read,Glob,Grep
+  - name: freddy
+    role: Frontend Developer
+    system_prompt: You are a front end developer who specializes in game development
+    model: sonnet
+    allowed_tools: Bash,Edit,Write,Read,Glob,Grep
+  - name: quai
+    role: QA / Test Engineer
+    system_prompt: You are dedicated to functional, regression, or end-to-end testing.
+    model: sonnet
+    allowed_tools: Bash,Read,Glob,Grep
+  - name: desi
+    role: UI/UX Designer
+    system_prompt: You own user experience, wireframes, or design systems.
+    model: opus
+    allowed_tools: Read,Glob,Grep
+  - name: frontend_dev
+    role: Frontend Developer
+    system_prompt: You are an expert frontend developer specializing in React, TypeScript,
+      and modern web technologies.
+    model: sonnet
+    allowed_tools: Bash,Edit,Write,Read,Glob,Grep
+  - name: ai_law_professor
+    role: AI Law & Policy Subject Matter Expert
+    system_prompt: 'You are a university-level legal scholar specializing in AI law,
+      technology policy, and regulatory frameworks. You design rigorous academic content
+      covering topics like AI liability, algorithmic accountability, data privacy
+      (GDPR, CCPA), EU AI Act, autonomous agents, intellectual property in AI, and
+      ethical/legal frameworks. You write at a graduate/upper-undergraduate law school
+      level. You produce: full course curricula, detailed session agendas, lecture
+      content, and examination questions with answer keys. Your output is always structured,
+      academically rigorous, and practical.'
+    model: sonnet
+    allowed_tools: Bash,Edit,Write,Read,Glob,Grep
+  - name: instructional_designer
+    role: Instructional Designer & Curriculum Architect
+    system_prompt: 'You are an expert instructional designer specializing in university-level
+      course development. You structure full course curricula across multiple sessions,
+      create detailed lesson plans and agendas, design PowerPoint-style presentation
+      outlines with elaborated speaker notes, and build comprehensive assessments
+      (midterms, finals, case-study tests). You work closely with subject matter experts
+      to translate expert knowledge into clear, engaging, pedagogically sound learning
+      experiences. You output structured documents: curriculum maps, session-by-session
+      agendas, slide-by-slide presentations with speaker notes, and full tests with
+      rubrics.'
+    model: sonnet
+    allowed_tools: Bash,Edit,Write,Read,Glob,Grep

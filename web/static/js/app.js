@@ -27,6 +27,7 @@ const App = {
         GitPanel.init('git-info');
         KnowledgePanel.init('knowledge-list');
         TeamConfig.init();
+        SessionStatus.init();
 
         await this.loadInitialState();
         this.connectWebSocket();
@@ -128,6 +129,15 @@ const App = {
 
             case 'knowledge_updated':
                 KnowledgePanel.load();
+                break;
+
+            case 'session_status':
+                SessionStatus.handleSessionUpdate(event.data);
+                if (event.data.session_state === 'paused') {
+                    AgentPanel.updateStatus(event.data.agent_id, 'session-paused');
+                } else if (event.data.session_state === 'active') {
+                    AgentPanel.updateStatus(event.data.agent_id, 'idle');
+                }
                 break;
 
             case 'agent_added':

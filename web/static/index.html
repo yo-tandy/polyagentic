@@ -43,7 +43,10 @@
         </section>
 
         <section class="panel panel--activity" id="activity-panel">
-            <h2 class="panel__title">Activity Log</h2>
+            <h2 class="panel__title">
+                Activity Log
+                <button class="panel__title-btn" id="session-status-btn" title="Session Status">S</button>
+            </h2>
             <div class="panel__content" id="activity-log"></div>
         </section>
 
@@ -188,6 +191,17 @@
         </div>
     </div>
 
+    <!-- Session Status Modal -->
+    <div class="modal-overlay" id="session-status-modal">
+        <div class="modal modal--session-status">
+            <div class="modal__header">
+                <h2 class="modal__title">Session Status</h2>
+                <button class="modal__close" id="session-status-close">&times;</button>
+            </div>
+            <div class="modal__body" id="session-status-list"></div>
+        </div>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/marked@15.0.4/marked.min.js"></script>
     <script src="/static/js/components/projectSelector.js"></script>
     <script src="/static/js/components/agentPanel.js"></script>
@@ -197,6 +211,7 @@
     <script src="/static/js/components/gitPanel.js"></script>
     <script src="/static/js/components/knowledgePanel.js"></script>
     <script src="/static/js/components/teamConfig.js"></script>
+    <script src="/static/js/components/sessionStatus.js"></script>
     <script src="/static/js/app.js"></script>
 </body>
 </html>

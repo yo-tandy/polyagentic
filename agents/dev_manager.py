@@ -93,16 +93,43 @@ class DevManagerAgent(Agent):
             max_budget_usd=self.max_budget_usd,
         )
 
+        # Retry on stale session: clear the session and invoke fresh
+        if result.is_error and session_id and "No conversation found" in result.result_text:
+            logger.warning(
+                "Agent %s stale session %s, clearing and retrying fresh",
+                self.agent_id, session_id,
+            )
+            if self._session_store:
+                self._session_store.set(self.agent_id, "")
+            result = await self._subprocess.invoke(
+                prompt=prompt,
+                system_prompt=self._get_system_prompt_if_first_call(),
+                model=self.model,
+                allowed_tools=self.allowed_tools,
+                session_id=None,
+                working_dir=self.working_dir,
+                timeout=self.timeout,
+                max_budget_usd=self.max_budget_usd,
+            )
+
         if self.use_session and result.session_id and self._session_store:
             self._session_store.set(self.agent_id, result.session_id)
+
+        # Record subprocess stats (stateless — no auto-pause)
+        if self._session_store:
+            self._session_store.record_request(
+                self.agent_id,
+                duration_ms=result.duration_ms or 0,
+                is_error=result.is_error,
+            )
 
         if result.is_error:
             logger.error("Agent %s Claude error: %s", self.agent_id, result.result_text)
             return [Message(
                 sender=self.agent_id,
-                recipient=msg.sender,
-                type=MessageType.RESPONSE,
-                content=f"Error processing request: {result.result_text}",
+                recipient="user",
+                type=MessageType.CHAT,
+                content=f"⚠️ {self.name} error: {result.result_text}",
                 task_id=msg.task_id,
                 parent_message_id=msg.id,
             )]

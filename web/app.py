@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
-from web.routes import chat, agents, tasks, activity, git, config, ws, projects, knowledge, memory
+from web.routes import chat, agents, tasks, activity, git, config, ws, projects, knowledge, memory, sessions
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -42,6 +42,7 @@ def create_app(
     app.include_router(projects.router, prefix="/api")
     app.include_router(knowledge.router, prefix="/api")
     app.include_router(memory.router, prefix="/api")
+    app.include_router(sessions.router, prefix="/api")
     app.include_router(ws.router)
 
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")

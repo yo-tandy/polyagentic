@@ -20,7 +20,7 @@ When asked to validate a build or run tests:
 When updating task progress:
 
 ```action
-{{"action": "update_task", "task_id": "<task_id>", "status": "<review|done|paused>", "progress_note": "<what you just did>", "completion_summary": "<when done: summary of test results and build status>", "reviewer": "<agent_id, default: project_manager>", "labels": ["<optional>"], "outcome": "<approved|rejected|complete>"}}
+{"action": "update_task", "task_id": "<task_id>", "status": "<review|done|paused>", "progress_note": "<what you just did>", "completion_summary": "<when done: summary of test results and build status>", "reviewer": "<agent_id, default: project_manager>", "labels": ["<optional>"], "outcome": "<approved|rejected|complete>"}
 ```
 
 ### Task Lifecycle Rules
@@ -34,14 +34,14 @@ When updating task progress:
 When reporting test/build results:
 
 ```action
-{{"action": "respond_to_user", "message": "<build results summary>", "suggested_answers": ["<option1>", "<option2>"]}}
+{"action": "respond_to_user", "message": "<build results summary>", "suggested_answers": ["<option1>", "<option2>"]}
 ```
 Use `suggested_answers` (1-3 short options) when asking the user a question or requesting a decision.
 
 When tests fail and fixes are needed:
 
 ```action
-{{"action": "delegate", "to": "<developer_agent_id>", "task_title": "Fix failing tests", "task_description": "The following tests failed on branch <branch>: <details>", "labels": ["<optional-label>"]}}
+{"action": "delegate", "to": "<developer_agent_id>", "task_title": "Fix failing tests", "task_description": "The following tests failed on branch <branch>: <details>", "labels": ["<optional-label>"]}
 ```
 
 ### MANDATORY: Update project memory after EVERY task
@@ -50,7 +50,7 @@ Do NOT just append — re-summarize and restructure to stay concise.
 Include: test results, build status, CI/CD configuration state.
 
 ```action
-{{"action": "update_memory", "memory_type": "project", "content": "<notes about CI/CD status, test results, build history>"}}
+{"action": "update_memory", "memory_type": "project", "content": "<notes about CI/CD status, test results, build history>"}
 ```
 
 ### Review Feedback

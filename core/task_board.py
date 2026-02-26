@@ -74,25 +74,39 @@ class TaskBoard:
 
         # Status transition validation
         if "status" in kwargs:
-            new_status = TaskStatus(kwargs["status"]) if isinstance(kwargs["status"], str) else kwargs["status"]
-            allowed = VALID_TRANSITIONS.get(task.status, set())
-            if new_status != task.status and new_status not in allowed:
-                if agent_id in PRIVILEGED_AGENTS:
+            raw_status = kwargs["status"]
+            if isinstance(raw_status, str):
+                try:
+                    new_status = TaskStatus(raw_status)
+                except ValueError:
                     logger.warning(
-                        "Privileged override: %s -> %s for task %s by %s",
-                        task.status.value, new_status.value, task_id, agent_id,
+                        "Invalid task status '%s' for task %s — ignoring status update",
+                        raw_status, task_id,
                     )
-                else:
-                    logger.warning(
-                        "Rejected invalid transition %s -> %s for task %s by %s",
-                        task.status.value, new_status.value, task_id, agent_id,
-                    )
-                    return None
-            kwargs["status"] = new_status
+                    kwargs.pop("status")
+                    new_status = None
+            else:
+                new_status = raw_status
 
-            # Default reviewer when moving to review
-            if new_status == TaskStatus.REVIEW and not kwargs.get("reviewer") and not task.reviewer:
-                kwargs["reviewer"] = "project_manager"
+            if new_status is not None:
+                allowed = VALID_TRANSITIONS.get(task.status, set())
+                if new_status != task.status and new_status not in allowed:
+                    if agent_id in PRIVILEGED_AGENTS:
+                        logger.warning(
+                            "Privileged override: %s -> %s for task %s by %s",
+                            task.status.value, new_status.value, task_id, agent_id,
+                        )
+                    else:
+                        logger.warning(
+                            "Rejected invalid transition %s -> %s for task %s by %s",
+                            task.status.value, new_status.value, task_id, agent_id,
+                        )
+                        return None
+                kwargs["status"] = new_status
+
+                # Default reviewer when moving to review
+                if new_status == TaskStatus.REVIEW and not kwargs.get("reviewer") and not task.reviewer:
+                    kwargs["reviewer"] = "project_manager"
 
         for key, value in kwargs.items():
             if hasattr(task, key):

@@ -32,6 +32,7 @@ class AgentStatus(str, Enum):
     WAITING = "waiting"
     ERROR = "error"
     OFFLINE = "offline"
+    SESSION_PAUSED = "session-paused"
 
 
 class Agent:
@@ -123,9 +124,29 @@ class Agent:
                     self.message_queue.get(), timeout=1.0
                 )
             except asyncio.TimeoutError:
+                # While idle, reflect session-paused state in status
+                if (self.use_session and self._session_store
+                        and self._session_store.is_paused(self.agent_id)):
+                    if self.status != AgentStatus.SESSION_PAUSED:
+                        self.status = AgentStatus.SESSION_PAUSED
+                        await self._broadcast_status()
                 continue
             except asyncio.CancelledError:
                 break
+
+            # Session pause gate: hold message while session is paused
+            while (self._running and self.use_session
+                   and self._session_store
+                   and self._session_store.is_paused(self.agent_id)):
+                if self.status != AgentStatus.SESSION_PAUSED:
+                    self.status = AgentStatus.SESSION_PAUSED
+                    await self._broadcast_status()
+                await asyncio.sleep(1.0)
+
+            # Session kill: clear dead session so next invoke creates a fresh one
+            if (self.use_session and self._session_store
+                    and self._session_store.is_killed(self.agent_id)):
+                self._session_store.clear_session(self.agent_id)
 
             self.status = AgentStatus.WORKING
             await self._broadcast_status()
@@ -225,10 +246,15 @@ class Agent:
                 self.status = AgentStatus.ERROR
                 await self._broadcast_status()
                 await asyncio.sleep(2)
+                # If session is paused, recover to SESSION_PAUSED instead of staying in ERROR
+                if (self.use_session and self._session_store
+                        and self._session_store.is_paused(self.agent_id)):
+                    self.status = AgentStatus.SESSION_PAUSED
+                    await self._broadcast_status()
             finally:
                 self.current_task_id = None
                 self.messages_processed += 1
-                if self.status != AgentStatus.ERROR:
+                if self.status not in (AgentStatus.ERROR, AgentStatus.SESSION_PAUSED):
                     self.status = AgentStatus.IDLE
                     await self._broadcast_status()
 
@@ -251,16 +277,58 @@ class Agent:
             max_budget_usd=self.max_budget_usd,
         )
 
+        # Retry on stale session: clear the session and invoke fresh
+        if result.is_error and session_id and "No conversation found" in result.result_text:
+            logger.warning(
+                "Agent %s stale session %s, clearing and retrying fresh",
+                self.agent_id, session_id,
+            )
+            if self._session_store:
+                self._session_store.set(self.agent_id, "")
+            result = await self._subprocess.invoke(
+                prompt=prompt,
+                system_prompt=self._get_system_prompt_if_first_call(),
+                model=self.model,
+                allowed_tools=self.allowed_tools,
+                session_id=None,
+                working_dir=self.working_dir,
+                timeout=self.timeout,
+                max_budget_usd=self.max_budget_usd,
+            )
+
         if self.use_session and result.session_id and self._session_store:
             self._session_store.set(self.agent_id, result.session_id)
 
+        # Record subprocess stats (all agents, not just session-based ones)
+        if self._session_store:
+            auto_paused = self._session_store.record_request(
+                self.agent_id,
+                duration_ms=result.duration_ms or 0,
+                is_error=result.is_error,
+            )
+            if auto_paused and self.use_session and self._broker:
+                logger.warning(
+                    "Session for %s auto-paused after consecutive errors",
+                    self.agent_id,
+                )
+                await self._broker.broadcast_event({
+                    "event_type": "session_status",
+                    "data": {
+                        "agent_id": self.agent_id,
+                        "session_state": "paused",
+                        "auto": True,
+                    },
+                })
+
         if result.is_error:
             logger.error("Agent %s Claude error: %s", self.agent_id, result.result_text)
+            # Send errors to the user, not back to the sender agent.
+            # Sending errors back to agents creates infinite ping-pong loops.
             return [Message(
                 sender=self.agent_id,
-                recipient=msg.sender,
-                type=MessageType.RESPONSE,
-                content=f"Error processing request: {result.result_text}",
+                recipient="user",
+                type=MessageType.CHAT,
+                content=f"⚠️ {self.name} error: {result.result_text}",
                 task_id=msg.task_id,
                 parent_message_id=msg.id,
             )]

@@ -184,6 +184,13 @@ class ProjectLifecycleManager:
         for agent in registry.get_all():
             agent.configure(session_store, broker, task_board, memory_manager, knowledge_base)
 
+        # Apply per-project model overrides from session store
+        for agent in registry.get_all():
+            stored_model = session_store.get_model(agent.agent_id)
+            if stored_model:
+                logger.info("Applying stored model override: %s → %s", agent.agent_id, stored_model)
+                agent.model = stored_model
+
         # Inject team roster (after configure so memory_manager is set)
         roster = build_team_roster(registry)
         dev_manager.update_team_roster(roster)

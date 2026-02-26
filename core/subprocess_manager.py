@@ -108,9 +108,21 @@ class SubprocessManager:
 
         stderr_text = stderr.decode(errors="replace").strip()
         if proc.returncode != 0:
+            # Claude CLI may return rc=1 with error info in stdout JSON
+            # (e.g. rate limits, context overflow). Try parsing stdout first.
+            raw = stdout.decode(errors="replace").strip()
+            if raw:
+                try:
+                    data = json.loads(raw)
+                    if "result" in data or "is_error" in data:
+                        logger.warning("Claude CLI rc=%d but stdout has JSON — parsing it", proc.returncode)
+                        return self._parse_output(raw, session_id)
+                except json.JSONDecodeError:
+                    pass
+            # Fallback: no usable JSON on stdout
             logger.error("Claude CLI error (rc=%d): %s", proc.returncode, stderr_text)
             return SubprocessResult(
-                result_text=f"[ERROR] {stderr_text}",
+                result_text=f"[ERROR] {stderr_text}" if stderr_text else "[ERROR] Claude CLI exited with an error",
                 session_id=session_id,
                 cost_usd=None,
                 duration_ms=None,

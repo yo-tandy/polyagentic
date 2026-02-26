@@ -189,6 +189,7 @@
 .status--waiting { background: #1a1e2e; color: var(--blue); }
 .status--error { background: #2e1a1a; color: var(--red); }
 .status--offline { background: #1a1a1a; color: var(--text-muted); }
+.status--session-paused { background: #2e2200; color: #fbbf24; }
 
 /* Task board */
 .task-columns {
@@ -1209,6 +1210,16 @@
     color: white;
 }
 
+.btn--muted {
+    background: transparent;
+    color: var(--text-muted);
+    border-color: var(--border);
+}
+.btn--muted:hover {
+    background: var(--surface);
+    color: var(--text-secondary);
+}
+
 .btn--sm {
     padding: 4px 10px;
     font-size: 10px;
@@ -1222,6 +1233,182 @@
 .form-status--error { color: var(--red); }
 .form-status--success { color: var(--green); }
 .form-status--info { color: var(--blue); }
+
+/* Panel title button */
+.panel__title-btn {
+    float: right;
+    font-family: var(--font);
+    font-size: 10px;
+    font-weight: 700;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--surface);
+    color: var(--text-muted);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s, color 0.15s;
+    margin-top: -2px;
+}
+
+.panel__title-btn:hover {
+    background: var(--accent);
+    color: white;
+    border-color: var(--accent);
+}
+
+/* Session Status Modal */
+.modal--session-status {
+    width: 650px;
+}
+
+.session-bulk-bar {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 10px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+}
+
+.session-bulk-btn {
+    padding: 5px 14px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    background: var(--surface-hover);
+    color: var(--text);
+    border: 1px solid var(--border);
+}
+.session-bulk-btn:hover {
+    background: var(--accent);
+    color: white;
+    border-color: var(--accent);
+}
+
+.session-card {
+    padding: 12px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    margin-bottom: 8px;
+}
+
+.session-card__header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.session-card__agent {
+    font-weight: 600;
+    font-size: 12px;
+}
+
+.session-card__state {
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.session-state--active { background: #1a2e1a; color: var(--green); }
+.session-state--paused { background: #2e2200; color: #fbbf24; }
+.session-state--killed { background: #2e1a1a; color: var(--red); }
+.session-state--stateless { background: #1a1a2e; color: #818cf8; }
+
+.session-card__stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.session-stat {
+    text-align: center;
+}
+
+.session-stat__label {
+    display: block;
+    font-size: 9px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 2px;
+}
+
+.session-stat__value {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text);
+}
+
+.session-stat--error {
+    color: var(--red);
+}
+
+.session-card__warning {
+    font-size: 10px;
+    padding: 4px 8px;
+    background: #2e1a1a;
+    color: var(--red);
+    border-radius: 4px;
+    margin-bottom: 8px;
+    font-weight: 600;
+}
+
+.session-card__meta {
+    font-size: 10px;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.session-model {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.session-model-select {
+    background: var(--surface);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-size: 10px;
+    font-family: inherit;
+    cursor: pointer;
+}
+.session-model-select:hover { border-color: var(--accent); }
+.session-model-select:focus { outline: none; border-color: var(--accent); }
+
+.session-card__actions {
+    display: flex;
+    gap: 6px;
+}
+
+.session-killed-label,
+.session-stateless-label {
+    font-size: 10px;
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+.session-empty {
+    text-align: center;
+    padding: 20px;
+    color: var(--text-muted);
+    font-size: 12px;
+}
 
 /* Responsive */
 @media (max-width: 1000px) {

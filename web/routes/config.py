@@ -49,7 +49,7 @@ async def create_and_register_agent(
 ):
     """Create, configure, register, and start a new custom agent.
 
-    Shared by the REST endpoint and the dev_manager's create_agent action.
+    Shared by the REST endpoint and Rory's recruit_agent action.
     Returns the created agent.
     """
     # Build team roster including the new agent
@@ -101,13 +101,13 @@ async def create_and_register_agent(
 
 
 def refresh_manager_rosters(registry):
-    """Rebuild the team roster and update dev_manager + project_manager prompts."""
+    """Rebuild the team roster and update all fixed agent prompts."""
     roster_lines = []
     for a in registry.get_all():
         roster_lines.append(f"- **{a.name}** (id: `{a.agent_id}`): {a.role}")
     roster = "\n".join(roster_lines)
 
-    for mgr_id in ("dev_manager", "project_manager", "product_manager"):
+    for mgr_id in ("manny", "rory", "innes", "perry", "jerry"):
         mgr = registry.get(mgr_id)
         if mgr and hasattr(mgr, "update_team_roster"):
             mgr.update_team_roster(roster)
@@ -124,7 +124,7 @@ async def get_agents_config(request: Request):
     """Return all agents with their configuration."""
     registry = request.app.state.registry
     agents = []
-    fixed_ids = {"dev_manager", "project_manager", "product_manager"}
+    fixed_ids = {"manny", "rory", "innes", "perry", "jerry"}
     for agent in registry.get_all():
         agents.append({
             "id": agent.agent_id,
@@ -179,7 +179,7 @@ async def add_agent(body: AddAgentRequest, request: Request):
 async def remove_agent(agent_id: str, request: Request):
     """Remove a custom agent. Fixed agents cannot be removed."""
     registry = request.app.state.registry
-    fixed_ids = {"dev_manager", "project_manager", "product_manager"}
+    fixed_ids = {"manny", "rory", "innes", "perry", "jerry"}
 
     if agent_id in fixed_ids:
         return {"error": "Cannot remove fixed agents"}

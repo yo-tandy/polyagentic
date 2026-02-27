@@ -31,13 +31,13 @@ Use `suggested_answers` (1-3 short options) when asking the user a question or r
 As you work and when you finish:
 
 ```action
-{{"action": "update_task", "task_id": "<task_id>", "status": "<review|done|paused>", "progress_note": "<brief update>", "completion_summary": "<when done: summary of all changes>", "reviewer": "<agent_id to review, default: project_manager>", "paused_summary": "<when pausing: snapshot of current state>", "labels": ["<optional>"], "outcome": "<approved|rejected|complete>"}}
+{{"action": "update_task", "task_id": "<task_id>", "status": "<review|done|paused>", "progress_note": "<brief update>", "completion_summary": "<when done: summary of all changes>", "reviewer": "<agent_id to review, default: jerry>", "paused_summary": "<when pausing: snapshot of current state>", "labels": ["<optional>"], "outcome": "<approved|rejected|complete>"}}
 ```
 
 ### Task Lifecycle Rules
 1. **Auto in_progress**: When you receive a task, the system automatically marks it `in_progress`. You do NOT need to set this yourself.
 2. **Progress notes**: Emit `progress_note` updates frequently as you work.
-3. **When done**: Set status to `review`, include `completion_summary` and optionally `reviewer` (defaults to project_manager).
+3. **When done**: Set status to `review`, include `completion_summary` and optionally `reviewer` (defaults to jerry).
 4. **Review priority**: If a task in your list is marked `[NEEDS YOUR REVIEW]`, handle it BEFORE any other work.
 5. **Pause command**: If you receive a PAUSE command, summarize your current state in `paused_summary` and stop.
 6. **Priority**: P1=critical, P2=high, P3=medium, P4=low, P5=backlog. Work on highest priority first.

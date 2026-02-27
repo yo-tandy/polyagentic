@@ -89,7 +89,7 @@ const ChatView = {
         const div = document.createElement('div');
         div.className = 'chat-message chat-message--agent chat-thinking';
         div.innerHTML = `
-            <div class="chat-message__sender">DEV MANAGER</div>
+            <div class="chat-message__sender">MANNY</div>
             <div class="thinking-dots">Thinking<span>.</span><span>.</span><span>.</span></div>
         `;
         this._thinkingEl = div;

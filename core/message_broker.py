@@ -179,7 +179,7 @@ class MessageBroker:
 
         msg = Message(
             sender="system",
-            recipient="project_manager",
+            recipient="jerry",
             type=MessageType.SYSTEM,
             content=(
                 f"Demo checkpoint: {done_count} tasks completed. "
@@ -188,7 +188,7 @@ class MessageBroker:
             ),
         )
         await self.deliver(msg)
-        logger.info("Triggered demo pause for project_manager (%d tasks done)", done_count)
+        logger.info("Triggered demo pause for jerry (%d tasks done)", done_count)
 
     def get_activity_log(self, limit: int = 100) -> list[dict]:
         items = list(self._activity_log)

@@ -23,7 +23,7 @@ async def send_chat(body: ChatRequest, request: Request):
 
     msg = Message(
         sender="user",
-        recipient="dev_manager",
+        recipient="manny",
         type=MessageType.CHAT,
         content=body.message,
     )

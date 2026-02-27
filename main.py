@@ -30,11 +30,11 @@ from core.git_manager import GitManager
 from core.project_store import ProjectStore
 from core.memory_manager import MemoryManager
 from core.knowledge_base import KnowledgeBase
-from agents.dev_manager import DevManagerAgent
-from agents.project_manager import ProjectManagerAgent
-from agents.product_manager import ProductManagerAgent
-from agents.integrator import IntegratorAgent
-from agents.cicd_engineer import CICDEngineerAgent
+from agents.manny import MannyAgent
+from agents.rory import RoryAgent
+from agents.innes import InnesAgent
+from agents.perry import PerryAgent
+from agents.jerry import JerryAgent
 from agents.custom_agent import create_custom_agent
 from web.app import create_app
 
@@ -142,30 +142,44 @@ class ProjectLifecycleManager:
         # Initialize git
         await git_manager.init_or_validate()
 
-        # Create initial team: product_manager, project_manager, dev_manager
+        # Create fixed agents: Manny, Rory, Innes, Perry, Jerry
         agents_config = self.team_config.get("agents", {})
         fixed_config = agents_config.get("fixed", {})
 
-        dev_manager = DevManagerAgent(
-            model=fixed_config.get("dev_manager", {}).get("model", DEFAULT_MODEL),
+        manny = MannyAgent(
+            model=fixed_config.get("manny", {}).get("model", DEFAULT_MODEL),
             messages_dir=messages_dir,
             working_dir=workspace_path,
         )
-        registry.register(dev_manager)
+        registry.register(manny)
 
-        project_mgr = ProjectManagerAgent(
-            model=fixed_config.get("project_manager", {}).get("model", DEFAULT_MODEL),
+        rory = RoryAgent(
+            model=fixed_config.get("rory", {}).get("model", DEFAULT_MODEL),
             messages_dir=messages_dir,
             working_dir=workspace_path,
         )
-        registry.register(project_mgr)
+        registry.register(rory)
 
-        product_mgr = ProductManagerAgent(
-            model=fixed_config.get("product_manager", {}).get("model", DEFAULT_MODEL),
+        innes = InnesAgent(
+            model=fixed_config.get("innes", {}).get("model", DEFAULT_MODEL),
             messages_dir=messages_dir,
             working_dir=workspace_path,
         )
-        registry.register(product_mgr)
+        registry.register(innes)
+
+        perry = PerryAgent(
+            model=fixed_config.get("perry", {}).get("model", DEFAULT_MODEL),
+            messages_dir=messages_dir,
+            working_dir=workspace_path,
+        )
+        registry.register(perry)
+
+        jerry = JerryAgent(
+            model=fixed_config.get("jerry", {}).get("model", DEFAULT_MODEL),
+            messages_dir=messages_dir,
+            working_dir=workspace_path,
+        )
+        registry.register(jerry)
 
         # Custom agents from team config (if any)
         for agent_def in agents_config.get("custom", []):
@@ -193,12 +207,17 @@ class ProjectLifecycleManager:
 
         # Inject team roster (after configure so memory_manager is set)
         roster = build_team_roster(registry)
-        dev_manager.update_team_roster(roster)
-        project_mgr.update_team_roster(roster)
-        product_mgr.update_team_roster(roster)
+        manny.update_team_roster(roster)
+        rory.update_team_roster(roster)
+        innes.update_team_roster(roster)
+        perry.update_team_roster(roster)
+        jerry.update_team_roster(roster)
 
-        # Dev manager extras
-        dev_manager.configure_extras(
+        # Manny extras (registry for delegation checks)
+        manny.configure_extras(registry=registry)
+
+        # Rory extras (deps for dynamic agent creation)
+        rory.configure_extras(
             registry=registry,
             git_manager=git_manager,
             session_store=session_store,
@@ -207,8 +226,11 @@ class ProjectLifecycleManager:
             worktrees_dir=worktrees_dir,
         )
 
+        # Innes extras (git_manager for future GitHub operations)
+        innes.configure_extras(git_manager=git_manager)
+
         # Create worktrees for non-manager agents
-        manager_ids = {"dev_manager", "project_manager", "product_manager"}
+        manager_ids = {"manny", "rory", "innes", "perry", "jerry"}
         for agent in registry.get_all():
             if agent.agent_id not in manager_ids:
                 branch = f"dev/{agent.agent_id}"

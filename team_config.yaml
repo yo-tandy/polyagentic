@@ -4,20 +4,21 @@ project:
   main_branch: main
 agents:
   fixed:
-    dev_manager:
+    manny:
       model: sonnet
-      description: Primary contact for the user. Breaks down requests and delegates
-        to team members.
-    project_manager:
+      description: Manager — primary user contact, thin router, delegates to team.
+    rory:
       model: sonnet
-      description: Manages priorities, release readiness, and coordination across
-        agents.
-    integrator:
+      description: Robot Resources — recruits and configures worker agents.
+    innes:
       model: sonnet
-      description: Merges branches, resolves conflicts, maintains main branch integrity.
-    cicd_engineer:
+      description: Integrator — manages repos, PRs, merges, code quality.
+    perry:
       model: sonnet
-      description: Runs tests, validates builds, reports build status.
+      description: Product Manager — builds specs through user conversations.
+    jerry:
+      model: sonnet
+      description: Project Manager — assigns tickets, monitors progress.
   custom:
   - name: backend_developer
     role: Senior Back-End Developer

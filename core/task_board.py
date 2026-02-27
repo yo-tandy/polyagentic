@@ -9,7 +9,7 @@ from core.task import Task, TaskStatus
 
 logger = logging.getLogger(__name__)
 
-PRIVILEGED_AGENTS = {"user", "dev_manager", "project_manager"}
+PRIVILEGED_AGENTS = {"user", "manny", "jerry"}
 
 VALID_TRANSITIONS = {
     TaskStatus.PENDING:     {TaskStatus.IN_PROGRESS, TaskStatus.BLOCKED, TaskStatus.PAUSED},
@@ -106,7 +106,7 @@ class TaskBoard:
 
                 # Default reviewer when moving to review
                 if new_status == TaskStatus.REVIEW and not kwargs.get("reviewer") and not task.reviewer:
-                    kwargs["reviewer"] = "project_manager"
+                    kwargs["reviewer"] = "jerry"
 
         for key, value in kwargs.items():
             if hasattr(task, key):

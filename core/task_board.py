@@ -26,11 +26,16 @@ class TaskBoard:
         self.persistence_path = persistence_path
         self._tasks: dict[str, Task] = {}
         self._on_update_callback = None
+        self._privileged_agents: set[str] = set(PRIVILEGED_AGENTS)
         self.load()
 
     def set_on_update(self, callback):
         """Set callback invoked after any task create/update. Signature: callback(task_id)."""
         self._on_update_callback = callback
+
+    def set_privileged_agents(self, agents: set[str]):
+        """Override the set of privileged agents (from team structure)."""
+        self._privileged_agents = agents
 
     def _notify(self, task_id: str):
         if self._on_update_callback:
@@ -91,7 +96,7 @@ class TaskBoard:
             if new_status is not None:
                 allowed = VALID_TRANSITIONS.get(task.status, set())
                 if new_status != task.status and new_status not in allowed:
-                    if agent_id in PRIVILEGED_AGENTS:
+                    if agent_id in self._privileged_agents:
                         logger.warning(
                             "Privileged override: %s -> %s for task %s by %s",
                             task.status.value, new_status.value, task_id, agent_id,

@@ -18,6 +18,8 @@ class MessageType(str, Enum):
     MERGE_REQUEST = "merge_request"
     BUILD_REQUEST = "build_request"
     REVIEW_REQUEST = "review_request"
+    CONVERSATION = "conversation"
+    CONVERSATION_END = "conversation_end"
 
 
 @dataclass

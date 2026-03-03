@@ -5,11 +5,10 @@ from pathlib import Path
 
 from core.agent import Agent
 from core.message import Message, MessageType
+from core.prompt_loader import load_prompt
 from config import CLAUDE_ALLOWED_TOOLS_READONLY
 
 logger = logging.getLogger(__name__)
-
-PROMPT_PATH = Path(__file__).parent / "prompts" / "jerry.md"
 
 
 class JerryAgent(Agent):
@@ -20,7 +19,7 @@ class JerryAgent(Agent):
     """
 
     def __init__(self, model: str, messages_dir: Path, working_dir: Path):
-        prompt_template = PROMPT_PATH.read_text()
+        prompt_template = load_prompt("jerry")
         self._prompt_template = prompt_template
         super().__init__(
             agent_id="jerry",
@@ -34,10 +33,11 @@ class JerryAgent(Agent):
             use_session=True,
         )
 
-    def update_team_roster(self, roster_text: str):
+    def update_team_roster(self, roster_text: str, team_roles: str = "", routing_guide: str = ""):
         """Re-render system prompt with updated team roster."""
-        prompt = self._prompt_template.replace("{team_roster}", roster_text)
-        self.system_prompt = prompt
+        self.system_prompt = self._render_prompt_template(
+            self._prompt_template, roster_text, team_roles=team_roles, routing_guide=routing_guide,
+        )
 
     async def _parse_response(self, result_text: str, original_msg: Message) -> list[Message]:
         messages = []

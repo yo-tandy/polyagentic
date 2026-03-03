@@ -28,14 +28,16 @@ from core.session_store import SessionStore
 from core.task_board import TaskBoard
 from core.git_manager import GitManager
 from core.project_store import ProjectStore
+from core.container_manager import ContainerManager
+from core.conversation_manager import ConversationManager
 from core.memory_manager import MemoryManager
 from core.knowledge_base import KnowledgeBase
-from agents.manny import MannyAgent
-from agents.rory import RoryAgent
-from agents.innes import InnesAgent
-from agents.perry import PerryAgent
-from agents.jerry import JerryAgent
+from core.team_structure import (
+    load_team_structure, instantiate_agent,
+    build_fixed_team_roles, build_routing_guide,
+)
 from agents.custom_agent import create_custom_agent
+from core.message import Message, MessageType
 from web.app import create_app
 
 logging.basicConfig(
@@ -81,13 +83,17 @@ class ProjectLifecycleManager:
         return state
 
     async def _teardown(self):
-        """Stop all agents and broker."""
+        """Stop all agents, containers, and broker."""
         state = self.current_state
         if not state:
             return
         logger.info("Tearing down current project...")
         for agent in state["registry"].get_all():
             await agent.stop()
+        # Stop Docker containers for worker agents
+        cm = state.get("container_manager")
+        if cm:
+            await cm.stop_all()
         await state["broker"].stop()
         if self._broker_task:
             self._broker_task.cancel()
@@ -139,50 +145,52 @@ class ProjectLifecycleManager:
         memory_manager = MemoryManager(MEMORY_DIR, project_memory_dir)
         knowledge_base = KnowledgeBase(docs_dir)
 
+        # Conversation manager
+        conversation_manager = ConversationManager()
+        conversation_manager.set_broadcast(broker.broadcast_event)
+        broker.set_conversation_manager(conversation_manager)
+
         # Initialize git
         await git_manager.init_or_validate()
 
-        # Create fixed agents: Manny, Rory, Innes, Perry, Jerry
-        agents_config = self.team_config.get("agents", {})
-        fixed_config = agents_config.get("fixed", {})
+        # Container manager for worker agents
+        container_manager = ContainerManager(workspace_path, worktrees_dir, messages_dir)
+        try:
+            await container_manager.ensure_image()
+        except Exception:
+            logger.warning("Docker image build failed — containerized agents unavailable")
 
-        manny = MannyAgent(
-            model=fixed_config.get("manny", {}).get("model", DEFAULT_MODEL),
-            messages_dir=messages_dir,
-            working_dir=workspace_path,
-        )
-        registry.register(manny)
+        # ── Load team structure (global + per-project override) ──
+        team_structure = load_team_structure(BASE_DIR, project_dir)
 
-        rory = RoryAgent(
-            model=fixed_config.get("rory", {}).get("model", DEFAULT_MODEL),
-            messages_dir=messages_dir,
-            working_dir=workspace_path,
-        )
-        registry.register(rory)
+        # Dependency map for configure_extras
+        extras_map = {
+            "registry": registry,
+            "git_manager": git_manager,
+            "session_store": session_store,
+            "workspace_path": workspace_path,
+            "messages_dir": messages_dir,
+            "worktrees_dir": worktrees_dir,
+            "container_manager": container_manager,
+            "project_store": ps,
+            "team_structure": team_structure,
+        }
 
-        innes = InnesAgent(
-            model=fixed_config.get("innes", {}).get("model", DEFAULT_MODEL),
-            messages_dir=messages_dir,
-            working_dir=workspace_path,
-        )
-        registry.register(innes)
+        # Apply model overrides from team_config.yaml (backward compat)
+        tc_fixed = self.team_config.get("agents", {}).get("fixed", {})
 
-        perry = PerryAgent(
-            model=fixed_config.get("perry", {}).get("model", DEFAULT_MODEL),
-            messages_dir=messages_dir,
-            working_dir=workspace_path,
-        )
-        registry.register(perry)
+        # ── Create agents from team structure (data-driven) ──
+        for agent_id, agent_def in team_structure.get_enabled_agents().items():
+            # Allow team_config.yaml to override model (backward compat)
+            tc_model = tc_fixed.get(agent_id, {}).get("model")
+            if tc_model:
+                agent_def.model = tc_model
 
-        jerry = JerryAgent(
-            model=fixed_config.get("jerry", {}).get("model", DEFAULT_MODEL),
-            messages_dir=messages_dir,
-            working_dir=workspace_path,
-        )
-        registry.register(jerry)
+            agent = instantiate_agent(agent_def, messages_dir, workspace_path)
+            registry.register(agent)
 
-        # Custom agents from team config (if any)
-        for agent_def in agents_config.get("custom", []):
+        # Custom agents from project-scoped storage
+        for agent_def in ps.get_custom_agents(project_id):
             agent = create_custom_agent(
                 name=agent_def["name"],
                 role=agent_def.get("role", agent_def["name"]),
@@ -196,7 +204,16 @@ class ProjectLifecycleManager:
 
         # Configure all agents (before roster injection so memory_manager is available)
         for agent in registry.get_all():
-            agent.configure(session_store, broker, task_board, memory_manager, knowledge_base)
+            agent.configure(session_store, broker, task_board, memory_manager, knowledge_base, conversation_manager)
+            agent._user_facing_agent = team_structure.user_facing_agent
+
+        # Set privileged agents on task board
+        task_board.set_privileged_agents(
+            {"user"} | set(team_structure.privileged_agents)
+        )
+
+        # Set checkpoint agent on broker
+        broker.set_checkpoint_agent(team_structure.checkpoint_agent)
 
         # Apply per-project model overrides from session store
         for agent in registry.get_all():
@@ -205,34 +222,27 @@ class ProjectLifecycleManager:
                 logger.info("Applying stored model override: %s → %s", agent.agent_id, stored_model)
                 agent.model = stored_model
 
-        # Inject team roster (after configure so memory_manager is set)
+        # ── Inject team roster + team roles + routing guide ──
         roster = build_team_roster(registry)
-        manny.update_team_roster(roster)
-        rory.update_team_roster(roster)
-        innes.update_team_roster(roster)
-        perry.update_team_roster(roster)
-        jerry.update_team_roster(roster)
-
-        # Manny extras (registry for delegation checks)
-        manny.configure_extras(registry=registry)
-
-        # Rory extras (deps for dynamic agent creation)
-        rory.configure_extras(
-            registry=registry,
-            git_manager=git_manager,
-            session_store=session_store,
-            workspace_path=workspace_path,
-            messages_dir=messages_dir,
-            worktrees_dir=worktrees_dir,
-        )
-
-        # Innes extras (git_manager for future GitHub operations)
-        innes.configure_extras(git_manager=git_manager)
-
-        # Create worktrees for non-manager agents
-        manager_ids = {"manny", "rory", "innes", "perry", "jerry"}
+        team_roles = build_fixed_team_roles(team_structure)
+        routing_guide = build_routing_guide(team_structure)
         for agent in registry.get_all():
-            if agent.agent_id not in manager_ids:
+            if hasattr(agent, "update_team_roster"):
+                agent.update_team_roster(roster, team_roles=team_roles, routing_guide=routing_guide)
+
+        # ── configure_extras (data-driven from team structure) ──
+        for agent_id, agent_def in team_structure.get_enabled_agents().items():
+            if not agent_def.configure_extras:
+                continue
+            agent = registry.get(agent_id)
+            if agent and hasattr(agent, "configure_extras"):
+                kwargs = {k: extras_map[k] for k in agent_def.configure_extras if k in extras_map}
+                agent.configure_extras(**kwargs)
+
+        # ── Create worktrees for agents that need them ──
+        no_worktree_ids = team_structure.get_worktree_excluded_ids()
+        for agent in registry.get_all():
+            if agent.agent_id not in no_worktree_ids:
                 branch = f"dev/{agent.agent_id}"
                 try:
                     worktree_path = await git_manager.create_worktree(
@@ -249,6 +259,33 @@ class ProjectLifecycleManager:
         # Start broker
         self._broker_task = asyncio.create_task(broker.start())
 
+        # Notify the user-facing agent about the project
+        ufa = team_structure.user_facing_agent
+        project_desc = project.get("description", "")
+        welcome = f"Project '{project.get('name', project_id)}' has been activated."
+        if project_desc:
+            welcome += f"\n\nProject description:\n{project_desc}"
+            welcome += (
+                "\n\nAnalyze this project description. Share your initial understanding "
+                "with the user — what you think this project is about, key areas of work, "
+                "and any immediate questions. Then kick off the Project Lifecycle Flow: "
+                "delegate to Perry to start building a product spec by interviewing the user "
+                "for deeper requirements. Save your initial understanding to project memory."
+            )
+        else:
+            welcome += (
+                "\n\nThis project has no description yet. Greet the user and ask them "
+                "to describe what they'd like to build. Use suggested_answers to offer "
+                "common project types as starting points."
+            )
+        welcome_msg = Message(
+            sender="system",
+            recipient=ufa,
+            type=MessageType.SYSTEM,
+            content=welcome,
+        )
+        await broker.deliver(welcome_msg)
+
         logger.info(
             "Project '%s' activated with %d agents",
             project_id, len(registry.get_all()),
@@ -261,8 +298,11 @@ class ProjectLifecycleManager:
             "git_manager": git_manager,
             "session_store": session_store,
             "team_config": self.team_config,
+            "team_structure": team_structure,
             "memory_manager": memory_manager,
             "knowledge_base": knowledge_base,
+            "container_manager": container_manager,
+            "conversation_manager": conversation_manager,
             "project_id": project_id,
         }
 

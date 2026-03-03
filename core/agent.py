@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from core.message import Message, MessageType
-from core.subprocess_manager import SubprocessManager
+from core.subprocess_manager import SubprocessManager, DockerSubprocessManager
 from core.session_store import SessionStore
 from config import DEFAULT_MODEL, CLAUDE_ALLOWED_TOOLS_DEV
 
@@ -49,6 +49,8 @@ class Agent:
         timeout: int = 300,
         use_session: bool = True,
         max_budget_usd: float | None = None,
+        execution_mode: str = "local",
+        container_name: str | None = None,
     ):
         self.agent_id = agent_id
         self.name = name
@@ -61,18 +63,25 @@ class Agent:
         self.timeout = timeout
         self.use_session = use_session
         self.max_budget_usd = max_budget_usd
+        self.execution_mode = execution_mode
+        self.container_name = container_name
 
         self.status = AgentStatus.OFFLINE
         self.current_task_id: str | None = None
         self.messages_processed = 0
         self.message_queue: asyncio.Queue[Message] = asyncio.Queue()
 
-        self._subprocess = SubprocessManager()
+        if execution_mode == "container" and container_name:
+            self._subprocess = DockerSubprocessManager(container_name)
+        else:
+            self._subprocess = SubprocessManager()
         self._session_store: SessionStore | None = None
         self._broker: MessageBroker | None = None
         self._task_board: TaskBoard | None = None
         self._memory_manager: MemoryManager | None = None
         self._knowledge_base: KnowledgeBase | None = None
+        self._conversation_manager = None
+        self._user_facing_agent: str = "manny"
         self._loop_task: asyncio.Task | None = None
         self._running = False
 
@@ -91,12 +100,14 @@ class Agent:
         task_board: TaskBoard,
         memory_manager: MemoryManager | None = None,
         knowledge_base: KnowledgeBase | None = None,
+        conversation_manager=None,
     ):
         self._session_store = session_store
         self._broker = broker
         self._task_board = task_board
         self._memory_manager = memory_manager
         self._knowledge_base = knowledge_base
+        self._conversation_manager = conversation_manager
 
     async def start(self):
         self.inbox_dir.mkdir(parents=True, exist_ok=True)
@@ -305,6 +316,9 @@ class Agent:
                 self.agent_id,
                 duration_ms=result.duration_ms or 0,
                 is_error=result.is_error,
+                cost_usd=result.cost_usd or 0.0,
+                input_tokens=result.input_tokens or 0,
+                output_tokens=result.output_tokens or 0,
             )
             if auto_paused and self.use_session and self._broker:
                 logger.warning(
@@ -334,6 +348,23 @@ class Agent:
             )]
 
         return await self._parse_response(result.result_text, msg)
+
+    def _render_prompt_template(
+        self,
+        template: str,
+        roster: str = "",
+        team_roles: str = "",
+        routing_guide: str = "",
+    ) -> str:
+        """Replace standard template variables in a prompt string."""
+        prompt = template.replace("{team_roster}", roster)
+        prompt = prompt.replace("{team_roles}", team_roles)
+        prompt = prompt.replace("{routing_guide}", routing_guide)
+        memory = ""
+        if self._memory_manager:
+            memory = self._memory_manager.get_combined_memory(self.agent_id)
+        prompt = prompt.replace("{memory}", memory or "No memory recorded yet.")
+        return prompt
 
     def _get_system_prompt_if_first_call(self) -> str | None:
         if self.use_session and self._session_store and self._session_store.get(self.agent_id):
@@ -422,15 +453,107 @@ class Agent:
 
     # ── Shared action extraction (used by subclasses) ──
 
+    # Maps wrong top-level keys to correct ones
+    _ACTION_KEY_MAP = {"tool": "action"}
+
+    # Maps wrong action names to correct ones
+    _ACTION_NAME_MAP = {
+        "save_to_memory": "update_memory",
+        "save_memory": "update_memory",
+        "memory": "update_memory",
+        "respond": "respond_to_user",
+        "reply": "respond_to_user",
+        "send_message": "respond_to_user",
+        "assign": "delegate",
+        "assign_task": "delegate",
+    }
+
+    # Maps wrong field names to correct ones, per action type
+    _FIELD_MAP = {
+        "delegate": {
+            "message": "task_description",
+            "description": "task_description",
+            "content": "task_description",
+            "target": "to",
+            "agent": "to",
+            "title": "task_title",
+        },
+        "respond_to_user": {
+            "content": "message",
+            "text": "message",
+            "response": "message",
+        },
+        "update_memory": {
+            "value": "content",
+            "text": "content",
+            "key": "memory_type",
+        },
+    }
+
+    def _normalize_action(self, raw: dict) -> dict:
+        """Normalize common wrong key/value patterns in a parsed action."""
+        result = dict(raw)
+
+        # Remap top-level keys (e.g. "tool" → "action")
+        for wrong, right in self._ACTION_KEY_MAP.items():
+            if wrong in result and right not in result:
+                result[right] = result.pop(wrong)
+
+        # Remap action names (e.g. "save_to_memory" → "update_memory")
+        action_name = result.get("action", "")
+        if action_name in self._ACTION_NAME_MAP:
+            result["action"] = self._ACTION_NAME_MAP[action_name]
+
+        # Remap field names per action type
+        action_type = result.get("action", "")
+        field_map = self._FIELD_MAP.get(action_type, {})
+        for wrong, right in field_map.items():
+            if wrong in result and right not in result:
+                result[right] = result.pop(wrong)
+
+        # Normalize agent references: lowercase "to" field
+        if "to" in result and isinstance(result["to"], str):
+            result["to"] = result["to"].lower().replace(" ", "_")
+
+        return result
+
     def _extract_actions(self, text: str) -> list[dict]:
-        """Extract ```action ... ``` JSON blocks from Claude output."""
+        """Extract action blocks from Claude output.
+
+        Primary: looks for ```action ... ``` fenced blocks.
+        Fallback: recovers bare JSON objects containing "action" or "tool" keys.
+        All parsed actions are normalized via _normalize_action().
+        """
         actions = []
-        pattern = r"```action\s*\n(.*?)\n```"
+
+        # Primary: fenced action blocks
+        pattern = r"```action\s*(.*?)\s*```"
         for match in re.findall(pattern, text, re.DOTALL):
             try:
-                actions.append(json.loads(match.strip()))
+                parsed = json.loads(match.strip())
+                actions.append(self._normalize_action(parsed))
             except json.JSONDecodeError:
                 logger.warning("Failed to parse action block: %s", match[:100])
+
+        if actions:
+            return actions
+
+        # Fallback: bare JSON objects with "action" or "tool" key
+        bare_pattern = r'(?<!`)\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}'
+        for match in re.findall(bare_pattern, text):
+            try:
+                parsed = json.loads(match.strip())
+                if isinstance(parsed, dict) and ("action" in parsed or "tool" in parsed):
+                    actions.append(self._normalize_action(parsed))
+            except (json.JSONDecodeError, ValueError):
+                continue
+
+        if actions:
+            logger.warning(
+                "Agent %s: recovered %d bare JSON action(s) (no fenced blocks found)",
+                self.agent_id, len(actions),
+            )
+
         return actions
 
     async def _handle_common_actions(self, actions: list[dict]) -> None:
@@ -456,6 +579,12 @@ class Agent:
 
             elif action_type == "update_task":
                 self._handle_update_task(action)
+
+            elif action_type == "start_conversation":
+                await self._handle_start_conversation(action)
+
+            elif action_type == "end_conversation":
+                await self._handle_end_conversation(action)
 
         # Broadcast KB update so frontend auto-refreshes
         if kb_changed and self._broker:
@@ -518,6 +647,66 @@ class Agent:
             if key in action:
                 updates[key] = action[key]
         self._task_board.update_task(task_id, **updates)
+
+    async def _handle_start_conversation(self, action: dict):
+        """Agent requests a direct conversation with the user."""
+        if not self._conversation_manager:
+            logger.warning("No conversation_manager for %s", self.agent_id)
+            return
+        goals = action.get("goals", [])
+        title = action.get("title", "Conversation")
+        conv = self._conversation_manager.start(self.agent_id, goals, title)
+
+        # Send CONVERSATION message to self with the conversation context
+        if self._broker:
+            msg = Message(
+                sender="system",
+                recipient=self.agent_id,
+                type=MessageType.CONVERSATION,
+                content=f"Conversation started: {title}. Goals: {', '.join(goals)}",
+                metadata={"conversation_id": conv["id"]},
+            )
+            await self._broker.deliver(msg)
+
+    async def _handle_end_conversation(self, action: dict):
+        """Agent ends a direct conversation with the user."""
+        if not self._conversation_manager:
+            return
+        summary = action.get("summary", "")
+        conv = self._conversation_manager.close_by_agent(self.agent_id)
+        if not conv:
+            return
+
+        # Save summary to knowledge base
+        if summary and self._knowledge_base:
+            try:
+                self._knowledge_base.add_document(
+                    title=conv.get("title", "Conversation Summary"),
+                    category="specs",
+                    content=summary,
+                    created_by=self.agent_id,
+                )
+                if self._broker:
+                    await self._broker.broadcast_event({
+                        "event_type": "knowledge_updated",
+                        "data": {},
+                    })
+            except Exception:
+                logger.exception("Failed to save conversation summary to KB")
+
+        # Send summary to the user-facing agent so they know what was discussed
+        if summary and self._broker:
+            summary_msg = Message(
+                sender=self.agent_id,
+                recipient=self._user_facing_agent,
+                type=MessageType.RESPONSE,
+                content=(
+                    f"Conversation completed: '{conv.get('title', 'Conversation')}'\n\n"
+                    f"Summary:\n{summary}"
+                ),
+                metadata={"conversation_summary": True},
+            )
+            await self._broker.deliver(summary_msg)
 
     async def _broadcast_status(self):
         if self._broker:

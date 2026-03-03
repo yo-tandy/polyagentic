@@ -17,6 +17,7 @@
             </div>
         </div>
         <div class="header__actions">
+            <button class="header__btn" id="project-info-btn">Project Info</button>
             <button class="header__btn" id="team-config-btn">Team Config</button>
             <span class="header__status" id="connection-status">Connecting...</span>
         </div>
@@ -36,6 +37,7 @@
         <section class="panel panel--chat" id="chat-panel">
             <h2 class="panel__title">Chat</h2>
             <div class="panel__content" id="chat-messages"></div>
+            <div id="conversation-bar" class="conv-bar"></div>
             <div class="chat-input">
                 <textarea id="chat-input" placeholder="Talk to Manny..." rows="2"></textarea>
                 <button id="chat-send">Send</button>
@@ -60,6 +62,9 @@
             <div class="panel__content" id="git-info"></div>
         </section>
     </main>
+
+    <!-- Conversation Window (floating panel) -->
+    <div id="conversation-window" class="conv-window"></div>
 
     <!-- Team Configuration Modal -->
     <div class="modal-overlay" id="team-config-modal">
@@ -202,6 +207,17 @@
         </div>
     </div>
 
+    <!-- Project Info Modal -->
+    <div class="modal-overlay" id="project-info-modal">
+        <div class="modal modal--project-info">
+            <div class="modal__header">
+                <h2 class="modal__title">Project Info</h2>
+                <button class="modal__close" id="project-info-close">&times;</button>
+            </div>
+            <div class="modal__body" id="project-info-body"></div>
+        </div>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/marked@15.0.4/marked.min.js"></script>
     <script src="/static/js/components/projectSelector.js"></script>
     <script src="/static/js/components/agentPanel.js"></script>
@@ -212,6 +228,9 @@
     <script src="/static/js/components/knowledgePanel.js"></script>
     <script src="/static/js/components/teamConfig.js"></script>
     <script src="/static/js/components/sessionStatus.js"></script>
+    <script src="/static/js/components/conversationBar.js"></script>
+    <script src="/static/js/components/conversationWindow.js"></script>
+    <script src="/static/js/components/projectInfo.js"></script>
     <script src="/static/js/app.js"></script>
 </body>
 </html>

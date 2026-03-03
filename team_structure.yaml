@@ -1,0 +1,92 @@
+# Team Structure — Default team composition
+#
+# This file is the single source of truth for who's on the team.
+# Per-project overrides: projects/<project_id>/team_structure.yaml
+# Override strategy: shallow merge per agent key.
+#   - Set fields on existing agents to override them
+#   - Set `enabled: false` to exclude an agent
+#   - Add new agent entries to extend the team
+
+user_facing_agent: manny
+privileged_agents: [manny, jerry]
+checkpoint_agent: jerry
+
+agents:
+  manny:
+    class: MannyAgent
+    module: agents.manny
+    name: Manny
+    role: Manager
+    description: "Primary user contact. Thin router that delegates to the right team member."
+    model: sonnet
+    is_fixed: true
+    needs_worktree: false
+    configure_extras: [registry]
+    routing_rules:
+      - request: "New project / major feature"
+        route_to: "Plan -> approve -> innes + rory + perry"
+      - request: "Requirements, specs, 'what to build'"
+        route_to: perry
+      - request: "Team composition, agent needs"
+        route_to: rory
+      - request: "Task assignment, progress, priorities"
+        route_to: jerry
+      - request: "Git repos, PRs, merges, code review"
+        route_to: innes
+      - request: "Simple, specific dev task"
+        route_to: "Directly to the relevant developer agent"
+      - request: "Status update, planning question"
+        route_to: jerry
+
+  rory:
+    class: RoryAgent
+    module: agents.rory
+    name: Rory
+    role: Robot Resources
+    description: "Recruits and configures worker agents. Send agent requirements to Rory."
+    model: sonnet
+    is_fixed: true
+    needs_worktree: false
+    configure_extras:
+      - registry
+      - git_manager
+      - session_store
+      - workspace_path
+      - messages_dir
+      - worktrees_dir
+      - container_manager
+      - project_store
+      - team_structure
+
+  innes:
+    class: InnesAgent
+    module: agents.innes
+    name: Innes
+    role: Integrator
+    description: "Manages git repos and pull requests. Handles merges and code reviews."
+    model: sonnet
+    is_fixed: true
+    needs_worktree: false
+    configure_extras:
+      - git_manager
+      - project_store
+
+  perry:
+    class: PerryAgent
+    module: agents.perry
+    name: Perry
+    role: Product Manager
+    description: "Builds product specs through user conversations. Clarifies requirements."
+    model: sonnet
+    is_fixed: true
+    needs_worktree: false
+
+  jerry:
+    class: JerryAgent
+    module: agents.jerry
+    name: Jerry
+    role: Project Manager
+    description: "Assigns tickets, monitors progress, coordinates the team."
+    model: sonnet
+    is_fixed: true
+    needs_worktree: false

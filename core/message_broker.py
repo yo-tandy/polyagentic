@@ -29,10 +29,19 @@ class MessageBroker:
         self._activity_log: deque[dict] = deque(maxlen=MAX_ACTIVITY_LOG)
         self._chat_history: deque[dict] = deque(maxlen=MAX_CHAT_HISTORY)
         self._task_board: TaskBoard | None = None
+        self._conversation_manager = None
+        self._checkpoint_agent = "jerry"
         self._last_demo_count = 0
 
     def set_task_board(self, task_board: TaskBoard):
         self._task_board = task_board
+
+    def set_conversation_manager(self, cm):
+        self._conversation_manager = cm
+
+    def set_checkpoint_agent(self, agent_id: str):
+        """Set the agent that receives demo/checkpoint pings."""
+        self._checkpoint_agent = agent_id
 
     async def start(self):
         self._running = True
@@ -111,6 +120,18 @@ class MessageBroker:
                     "task_id": message.task_id,
                     "metadata": message.metadata or {},
                 }
+
+                # Tag with conversation_id if sender is the active conversation agent
+                conv = (
+                    self._conversation_manager.get_active()
+                    if self._conversation_manager else None
+                )
+                if conv and message.sender == conv["agent_id"]:
+                    chat_event["conversation_id"] = conv["id"]
+                    self._conversation_manager.record_message(
+                        message.sender, message.content,
+                    )
+
                 self._chat_history.append(chat_event)
 
                 await self.broadcast_event({
@@ -179,7 +200,7 @@ class MessageBroker:
 
         msg = Message(
             sender="system",
-            recipient="jerry",
+            recipient=self._checkpoint_agent,
             type=MessageType.SYSTEM,
             content=(
                 f"Demo checkpoint: {done_count} tasks completed. "
@@ -188,7 +209,7 @@ class MessageBroker:
             ),
         )
         await self.deliver(msg)
-        logger.info("Triggered demo pause for jerry (%d tasks done)", done_count)
+        logger.info("Triggered demo pause for %s (%d tasks done)", self._checkpoint_agent, done_count)
 
     def get_activity_log(self, limit: int = 100) -> list[dict]:
         items = list(self._activity_log)

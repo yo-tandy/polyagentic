@@ -72,9 +72,10 @@ class ProjectStore:
         meta_path = project_dir / "project.json"
         meta_path.write_text(json.dumps(project_meta, indent=2))
 
-        # Empty tasks and sessions
+        # Empty tasks, sessions, and agents
         (project_dir / "tasks.json").write_text("{}")
         (project_dir / "sessions.json").write_text("{}")
+        (project_dir / "agents.json").write_text(json.dumps({"agents": []}, indent=2))
 
         # Update registry
         self._registry.setdefault("projects", []).append(project_meta)
@@ -111,6 +112,27 @@ class ProjectStore:
     def get_project_dir(self, project_id: str) -> Path:
         return self.projects_dir / project_id
 
+    def update_project(self, project_id: str, **kwargs) -> dict | None:
+        """Update project metadata fields (e.g., github_url)."""
+        project = self.get_project(project_id)
+        if not project:
+            return None
+        project.update(kwargs)
+        project["updated_at"] = datetime.now(timezone.utc).isoformat()
+        self._save_registry()
+
+        # Also update on-disk project.json
+        meta_path = self.get_project_dir(project_id) / "project.json"
+        if meta_path.exists():
+            try:
+                meta = json.loads(meta_path.read_text())
+                meta.update(kwargs)
+                meta["updated_at"] = project["updated_at"]
+                meta_path.write_text(json.dumps(meta, indent=2))
+            except (json.JSONDecodeError, OSError):
+                pass
+        return project
+
     def delete_project(self, project_id: str) -> bool:
         """Remove project from registry (does NOT delete files for safety)."""
         projects = self._registry.get("projects", [])
@@ -123,6 +145,44 @@ class ProjectStore:
         self._save_registry()
         logger.info("Deleted project '%s' from registry", project_id)
         return True
+
+    # ── Custom agents (per-project) ──
+
+    def _agents_path(self, project_id: str) -> Path:
+        return self.get_project_dir(project_id) / "agents.json"
+
+    def get_custom_agents(self, project_id: str) -> list[dict]:
+        """Return custom agent definitions for a project."""
+        path = self._agents_path(project_id)
+        if not path.exists():
+            return []
+        try:
+            data = json.loads(path.read_text())
+            return data.get("agents", [])
+        except (json.JSONDecodeError, OSError):
+            return []
+
+    def save_custom_agents(self, project_id: str, agents: list[dict]):
+        """Write the full custom agents list for a project."""
+        path = self._agents_path(project_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"agents": agents}, indent=2))
+
+    def add_custom_agent(self, project_id: str, agent_def: dict):
+        """Append one custom agent to a project (skip if name exists)."""
+        agents = self.get_custom_agents(project_id)
+        if any(a.get("name") == agent_def.get("name") for a in agents):
+            return
+        agents.append(agent_def)
+        self.save_custom_agents(project_id, agents)
+        logger.info("Saved custom agent '%s' to project '%s'", agent_def.get("name"), project_id)
+
+    def remove_custom_agent(self, project_id: str, agent_name: str):
+        """Remove one custom agent from a project."""
+        agents = self.get_custom_agents(project_id)
+        agents = [a for a in agents if a.get("name") != agent_name]
+        self.save_custom_agents(project_id, agents)
+        logger.info("Removed custom agent '%s' from project '%s'", agent_name, project_id)
 
     # ── Path helpers ──
 
@@ -146,6 +206,10 @@ class ProjectStore:
 
     def get_project_memory_dir(self, project_id: str) -> Path:
         return self.get_project_dir(project_id) / "memory"
+
+    def get_team_structure_path(self, project_id: str) -> Path:
+        """Return the path for a project-level team structure override."""
+        return self.get_project_dir(project_id) / "team_structure.yaml"
 
     # ── Internals ──
 

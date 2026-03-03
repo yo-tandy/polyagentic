@@ -159,3 +159,104 @@ class GitManager:
             "changes": out.split("\n") if out.strip() else [],
         }
 
+    # ── GitHub CLI (`gh`) methods ──
+
+    async def _run_gh(self, *args: str, cwd: Path | None = None) -> tuple[int, str, str]:
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "gh", *args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=str(cwd or self.workspace),
+            )
+            stdout, stderr = await proc.communicate()
+            return (
+                proc.returncode,
+                stdout.decode(errors="replace").strip(),
+                stderr.decode(errors="replace").strip(),
+            )
+        except FileNotFoundError:
+            return (1, "", "gh CLI not installed. Install from https://cli.github.com")
+
+    async def create_github_repo(
+        self, name: str, description: str = "", private: bool = True
+    ) -> dict:
+        """Create a GitHub repo and set it as the remote origin."""
+        args = ["repo", "create", name, "--source", ".", "--push"]
+        if private:
+            args.append("--private")
+        else:
+            args.append("--public")
+        if description:
+            args += ["--description", description]
+
+        rc, out, err = await self._run_gh(*args)
+        if rc != 0:
+            raise RuntimeError(f"Failed to create GitHub repo: {err}")
+
+        # Extract URL from output
+        url = out.strip().split("\n")[-1].strip()
+        logger.info("Created GitHub repo: %s", url)
+        return {"url": url, "name": name}
+
+    async def create_pull_request(
+        self, branch: str, title: str, body: str, base: str | None = None
+    ) -> dict:
+        """Create a PR from the given branch."""
+        args = [
+            "pr", "create",
+            "--head", branch,
+            "--title", title,
+            "--body", body,
+        ]
+        if base:
+            args += ["--base", base]
+
+        rc, out, err = await self._run_gh(*args)
+        if rc != 0:
+            raise RuntimeError(f"Failed to create PR: {err}")
+
+        url = out.strip()
+        logger.info("Created PR: %s", url)
+        return {"url": url, "branch": branch, "title": title}
+
+    async def list_pull_requests(self, state: str = "open") -> list[dict]:
+        """List PRs as JSON."""
+        rc, out, err = await self._run_gh(
+            "pr", "list", "--state", state,
+            "--json", "number,title,headRefName,state,author,url",
+        )
+        if rc != 0:
+            logger.warning("Failed to list PRs: %s", err)
+            return []
+        import json
+        try:
+            return json.loads(out)
+        except (json.JSONDecodeError, ValueError):
+            return []
+
+    async def get_pull_request(self, pr_number: int) -> dict | None:
+        """Get PR details."""
+        rc, out, err = await self._run_gh(
+            "pr", "view", str(pr_number),
+            "--json", "number,title,body,headRefName,baseRefName,state,additions,deletions,files,reviewDecision,url",
+        )
+        if rc != 0:
+            return None
+        import json
+        try:
+            return json.loads(out)
+        except (json.JSONDecodeError, ValueError):
+            return None
+
+    async def merge_pull_request(
+        self, pr_number: int, method: str = "squash"
+    ) -> dict:
+        """Merge a PR."""
+        args = ["pr", "merge", str(pr_number), f"--{method}", "--delete-branch"]
+        rc, out, err = await self._run_gh(*args)
+        if rc != 0:
+            raise RuntimeError(f"Failed to merge PR #{pr_number}: {err}")
+        logger.info("Merged PR #%d via %s", pr_number, method)
+        return {"merged": True, "pr_number": pr_number, "method": method}
+

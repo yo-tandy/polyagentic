@@ -112,7 +112,13 @@ class SessionStore:
         self.save()
 
     def record_request(
-        self, agent_id: str, duration_ms: int, is_error: bool
+        self,
+        agent_id: str,
+        duration_ms: int,
+        is_error: bool,
+        cost_usd: float = 0.0,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
     ) -> bool:
         """Record a request and return True if auto-pause was triggered."""
         rec = self._store.get(agent_id)
@@ -122,6 +128,9 @@ class SessionStore:
 
         rec["request_count"] = rec.get("request_count", 0) + 1
         rec["total_duration_ms"] = rec.get("total_duration_ms", 0) + duration_ms
+        rec["total_cost_usd"] = rec.get("total_cost_usd", 0.0) + (cost_usd or 0.0)
+        rec["total_input_tokens"] = rec.get("total_input_tokens", 0) + (input_tokens or 0)
+        rec["total_output_tokens"] = rec.get("total_output_tokens", 0) + (output_tokens or 0)
         rec["last_used_at"] = datetime.now(timezone.utc).isoformat()
 
         if is_error:

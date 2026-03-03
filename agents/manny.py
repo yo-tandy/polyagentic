@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
 from core.agent import Agent
 from core.message import Message, MessageType
+from core.prompt_loader import load_prompt
 from config import CLAUDE_ALLOWED_TOOLS_NONE
 
 logger = logging.getLogger(__name__)
-
-PROMPT_PATH = Path(__file__).parent / "prompts" / "manny.md"
 
 
 class MannyAgent(Agent):
@@ -21,7 +21,7 @@ class MannyAgent(Agent):
     """
 
     def __init__(self, model: str, messages_dir: Path, working_dir: Path):
-        prompt_template = PROMPT_PATH.read_text()
+        prompt_template = load_prompt("manny")
         self._prompt_template = prompt_template
         self._team_roster: str = ""
         super().__init__(
@@ -43,20 +43,21 @@ class MannyAgent(Agent):
         """Provide registry for delegation checks."""
         self._registry = registry
 
-    def update_team_roster(self, roster_text: str):
+    def update_team_roster(self, roster_text: str, team_roles: str = "", routing_guide: str = ""):
         """Re-render system prompt with updated team roster."""
         self._team_roster = roster_text
+        self._team_roles = team_roles
+        self._routing_guide = routing_guide
         self._render_system_prompt()
 
     def _render_system_prompt(self):
-        """Re-build system prompt from template + roster + memory."""
-        prompt = self._prompt_template.replace("{team_roster}", self._team_roster or "")
-        if self._memory_manager:
-            memory = self._memory_manager.get_combined_memory(self.agent_id)
-            prompt = prompt.replace("{memory}", memory or "No memory recorded yet.")
-        else:
-            prompt = prompt.replace("{memory}", "No memory recorded yet.")
-        self.system_prompt = prompt
+        """Re-build system prompt from template + roster + roles + routing + memory."""
+        self.system_prompt = self._render_prompt_template(
+            self._prompt_template,
+            roster=self._team_roster or "",
+            team_roles=getattr(self, "_team_roles", ""),
+            routing_guide=getattr(self, "_routing_guide", ""),
+        )
 
     def _get_system_prompt_if_first_call(self) -> str | None:
         # Stateless — always re-render and send full system prompt
@@ -109,6 +110,9 @@ class MannyAgent(Agent):
                 self.agent_id,
                 duration_ms=result.duration_ms or 0,
                 is_error=result.is_error,
+                cost_usd=result.cost_usd or 0.0,
+                input_tokens=result.input_tokens or 0,
+                output_tokens=result.output_tokens or 0,
             )
 
         if result.is_error:
@@ -125,23 +129,27 @@ class MannyAgent(Agent):
         result_text = result.result_text
         actions = self._extract_actions(result_text)
         await self._handle_common_actions(actions)
-        return self._parse_response(result_text, msg)
+        return self._parse_response(result_text, msg, actions=actions)
 
-    def _parse_response(self, result_text: str, original_msg: Message) -> list[Message]:
+    def _parse_response(self, result_text: str, original_msg: Message, actions: list[dict] | None = None) -> list[Message]:
         messages = []
-        actions = self._extract_actions(result_text)
+        if actions is None:
+            actions = self._extract_actions(result_text)
 
         if not actions:
             logger.warning(
                 "Manny produced no action blocks (prompt from %s, %d chars). "
-                "Forwarding raw text to user.",
+                "Forwarding sanitized text to user.",
                 original_msg.sender, len(result_text),
             )
+            cleaned = self._sanitize_for_user(result_text)
+            if not cleaned.strip():
+                cleaned = "I received your request but encountered a formatting issue. Let me try again."
             messages.append(Message(
                 sender=self.agent_id,
                 recipient="user",
                 type=MessageType.CHAT,
-                content=result_text,
+                content=cleaned,
                 task_id=original_msg.task_id,
                 parent_message_id=original_msg.id,
             ))
@@ -257,3 +265,16 @@ class MannyAgent(Agent):
                 ))
 
         return messages
+
+    @staticmethod
+    def _sanitize_for_user(text: str) -> str:
+        """Strip action blocks and bare JSON from text before showing to user."""
+        # Remove fenced code blocks containing JSON
+        cleaned = re.sub(r'```\w*\s*\{.*?\}\s*```', '', text, flags=re.DOTALL)
+        # Remove bare JSON objects
+        cleaned = re.sub(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', '', cleaned)
+        # Remove [Saving to memory: ...] annotations
+        cleaned = re.sub(r'\[.*?(?:memory|saving|delegat).*?\]', '', cleaned, flags=re.IGNORECASE)
+        # Collapse excessive whitespace
+        cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+        return cleaned.strip()

@@ -28,6 +28,9 @@ const App = {
         KnowledgePanel.init('knowledge-list');
         TeamConfig.init();
         SessionStatus.init();
+        ConversationBar.init();
+        ConversationWindow.init();
+        ProjectInfo.init();
 
         await this.loadInitialState();
         this.connectWebSocket();
@@ -49,11 +52,28 @@ const App = {
         ActivityLog.render(activityRes.activity || []);
         GitPanel.render(branchesRes.branches || [], logRes.log || []);
 
-        // Restore chat history
+        // Check for active conversations (now returns a list)
+        const convRes = await safeFetch('/api/conversations/active', { conversations: [] });
+        const activeConvs = convRes.conversations || [];
+        const activeConvIds = new Set(activeConvs.map(c => c.id));
+
+        // Restore conversation windows first (so messages can be added to them)
+        for (const conv of activeConvs) {
+            ConversationWindow.show(conv);
+        }
+
+        // Restore chat history (split main vs conversation messages)
         for (const msg of (chatRes.messages || [])) {
             const type = msg.sender === 'user' ? 'user' : 'agent';
             const name = msg.sender === 'user' ? 'You' : (msg.sender || 'Agent');
-            ChatView.addMessage(name, msg.content, type, msg.metadata);
+            if (msg.conversation_id && activeConvIds.has(msg.conversation_id)) {
+                ConversationWindow.addMessage(name, msg.content, type, {
+                    ...msg.metadata,
+                    conversation_id: msg.conversation_id,
+                });
+            } else if (!msg.conversation_id) {
+                ChatView.addMessage(name, msg.content, type, msg.metadata);
+            }
         }
 
         // Load knowledge base
@@ -106,12 +126,21 @@ const App = {
                 break;
 
             case 'chat_response':
-                ChatView.addMessage(
-                    event.data.sender || 'Agent',
-                    event.data.content,
-                    'agent',
-                    event.data.metadata
-                );
+                if (event.data.conversation_id) {
+                    ConversationWindow.addMessage(
+                        event.data.sender || 'Agent',
+                        event.data.content,
+                        'agent',
+                        { ...event.data.metadata, conversation_id: event.data.conversation_id }
+                    );
+                } else {
+                    ChatView.addMessage(
+                        event.data.sender || 'Agent',
+                        event.data.content,
+                        'agent',
+                        event.data.metadata
+                    );
+                }
                 break;
 
             case 'new_message':
@@ -142,6 +171,14 @@ const App = {
 
             case 'agent_added':
                 this.refreshAgents();
+                break;
+
+            case 'conversation_started':
+                ConversationWindow.show(event.data);
+                break;
+
+            case 'conversation_ended':
+                ConversationWindow.hide(event.data.id);
                 break;
 
             case 'project_switched':

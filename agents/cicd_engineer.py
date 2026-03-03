@@ -5,16 +5,15 @@ from pathlib import Path
 
 from core.agent import Agent
 from core.message import Message, MessageType
+from core.prompt_loader import load_prompt
 from config import CLAUDE_ALLOWED_TOOLS_DEV
 
 logger = logging.getLogger(__name__)
 
-PROMPT_PATH = Path(__file__).parent / "prompts" / "cicd_engineer.md"
-
 
 class CICDEngineerAgent(Agent):
     def __init__(self, model: str, messages_dir: Path, working_dir: Path):
-        prompt_template = PROMPT_PATH.read_text()
+        prompt_template = load_prompt("cicd_engineer")
         super().__init__(
             agent_id="cicd_engineer",
             name="CI/CD Engineer",

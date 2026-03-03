@@ -27,6 +27,7 @@ const AgentPanel = {
                         <div class="agent-card__role">${a.role}</div>
                     </div>
                     <div class="agent-card__actions">
+                        <button class="agent-card__chat-btn" data-agent-id="${a.id}" title="Chat with agent">C</button>
                         <button class="agent-card__memory-btn" data-agent-id="${a.id}" title="View agent memory">M</button>
                         <button class="agent-card__status-btn" data-agent-id="${a.id}" title="Request status report">?</button>
                     </div>
@@ -39,7 +40,7 @@ const AgentPanel = {
         this.container.querySelectorAll('.agent-card').forEach(card => {
             card.addEventListener('click', (e) => {
                 // Don't trigger selection if clicking buttons
-                if (e.target.closest('.agent-card__status-btn') || e.target.closest('.agent-card__memory-btn')) return;
+                if (e.target.closest('.agent-card__status-btn') || e.target.closest('.agent-card__memory-btn') || e.target.closest('.agent-card__chat-btn')) return;
                 const agentId = card.dataset.agentId;
                 this._toggleSelect(agentId);
             });
@@ -60,6 +61,15 @@ const AgentPanel = {
                 e.stopPropagation();
                 const agentId = btn.dataset.agentId;
                 this._showMemory(agentId);
+            });
+        });
+
+        // Bind chat button handlers
+        this.container.querySelectorAll('.agent-card__chat-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const agentId = btn.dataset.agentId;
+                this._startChat(agentId, btn);
             });
         });
 
@@ -101,6 +111,33 @@ const AgentPanel = {
             btn.disabled = false;
             btn.textContent = '?';
         }, 3000);
+    },
+
+    async _startChat(agentId, btn) {
+        btn.disabled = true;
+        btn.textContent = '...';
+        try {
+            const res = await fetch('/api/conversations/start', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ agent_id: agentId }),
+            });
+            const data = await res.json();
+            if (data.error) {
+                console.error('Failed to start chat:', data.error);
+            } else if (data.existing) {
+                // Already open — focus the existing tab directly
+                ConversationWindow.show(data);
+            }
+            // For new conversations, ConversationWindow.show() is triggered
+            // by the conversation_started WS event
+        } catch (err) {
+            console.error('Failed to start chat:', err);
+        }
+        setTimeout(() => {
+            btn.disabled = false;
+            btn.textContent = 'C';
+        }, 2000);
     },
 
     async _showMemory(agentId) {

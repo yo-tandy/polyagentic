@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
-from web.routes import chat, agents, tasks, activity, git, config, ws, projects, knowledge, memory, sessions
+from web.routes import chat, agents, tasks, activity, git, config, ws, projects, knowledge, memory, sessions, conversations, github
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -27,6 +27,9 @@ def create_app(
         app.state.session_store = app_state["session_store"]
         app.state.memory_manager = app_state.get("memory_manager")
         app.state.knowledge_base = app_state.get("knowledge_base")
+        app.state.container_manager = app_state.get("container_manager")
+        app.state.conversation_manager = app_state.get("conversation_manager")
+        app.state.team_structure = app_state.get("team_structure")
         app.state.project_store = project_store
         app.state.lifecycle_manager = lifecycle_manager
         yield
@@ -43,6 +46,8 @@ def create_app(
     app.include_router(knowledge.router, prefix="/api")
     app.include_router(memory.router, prefix="/api")
     app.include_router(sessions.router, prefix="/api")
+    app.include_router(conversations.router, prefix="/api")
+    app.include_router(github.router, prefix="/api")
     app.include_router(ws.router)
 
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")

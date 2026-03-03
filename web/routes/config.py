@@ -3,12 +3,10 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-import yaml
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
 from config import (
-    TEAM_CONFIG_FILE,
     DEFAULT_MODEL, CLAUDE_ALLOWED_TOOLS_DEV,
 )
 from agents.custom_agent import create_custom_agent
@@ -46,10 +44,14 @@ async def create_and_register_agent(
     worktrees_dir: Path,
     memory_manager=None,
     knowledge_base=None,
+    container_manager=None,
+    project_store=None,
+    team_structure=None,
 ):
     """Create, configure, register, and start a new custom agent.
 
     Shared by the REST endpoint and Rory's recruit_agent action.
+    When container_manager is provided, the agent runs inside a Docker container.
     Returns the created agent.
     """
     # Build team roster including the new agent
@@ -58,6 +60,29 @@ async def create_and_register_agent(
         roster_lines.append(f"- **{a.name}** (id: `{a.agent_id}`): {a.role}")
     roster_lines.append(f"- **{name.replace('_', ' ').title()}** (id: `{name}`): {role}")
     roster = "\n".join(roster_lines)
+
+    # Determine execution mode
+    execution_mode = "local"
+    container_name = None
+
+    if container_manager:
+        # Create worktree first (container mounts it)
+        branch = f"dev/{name}"
+        worktree_path = None
+        try:
+            worktree_path = await git_manager.create_worktree(
+                name, branch, worktrees_dir
+            )
+        except RuntimeError as e:
+            logger.warning("Could not create worktree for %s: %s", name, e)
+
+        try:
+            container_name = await container_manager.create_container(
+                name, worktree_path
+            )
+            execution_mode = "container"
+        except RuntimeError as e:
+            logger.warning("Could not create container for %s, falling back to local: %s", name, e)
 
     agent = create_custom_agent(
         name=name,
@@ -68,20 +93,23 @@ async def create_and_register_agent(
         messages_dir=messages_dir,
         working_dir=workspace_path,
         team_roster=roster,
+        execution_mode=execution_mode,
+        container_name=container_name,
     )
 
     agent.configure(session_store, broker, task_board, memory_manager, knowledge_base)
     registry.register(agent)
 
-    # Create worktree
-    branch = f"dev/{agent.agent_id}"
-    try:
-        worktree_path = await git_manager.create_worktree(
-            agent.agent_id, branch, worktrees_dir
-        )
-        agent.working_dir = worktree_path
-    except RuntimeError as e:
-        logger.warning("Could not create worktree for %s: %s", agent.agent_id, e)
+    if execution_mode == "local":
+        # Local mode — create worktree and update working dir
+        branch = f"dev/{agent.agent_id}"
+        try:
+            worktree_path = await git_manager.create_worktree(
+                agent.agent_id, branch, worktrees_dir
+            )
+            agent.working_dir = worktree_path
+        except RuntimeError as e:
+            logger.warning("Could not create worktree for %s: %s", agent.agent_id, e)
 
     await agent.start()
 
@@ -91,27 +119,40 @@ async def create_and_register_agent(
         "data": agent.to_info_dict(),
     })
 
-    # Persist to YAML
-    _save_agent_to_config_file(name, role, system_prompt, model, allowed_tools)
+    # Persist to project-scoped storage
+    if project_store:
+        active_id = project_store.get_active_project_id()
+        if active_id:
+            project_store.add_custom_agent(active_id, {
+                "name": name,
+                "role": role,
+                "system_prompt": system_prompt or f"You are a {role}.",
+                "model": model,
+                "allowed_tools": allowed_tools,
+            })
 
     # Refresh manager prompts
-    refresh_manager_rosters(registry)
+    refresh_manager_rosters(registry, team_structure=team_structure)
 
     return agent
 
 
-def refresh_manager_rosters(registry):
-    """Rebuild the team roster and update all fixed agent prompts."""
+def refresh_manager_rosters(registry, team_structure=None):
+    """Rebuild the team roster and update all agents with update_team_roster."""
+    from core.team_structure import build_fixed_team_roles, build_routing_guide
+
     roster_lines = []
     for a in registry.get_all():
         roster_lines.append(f"- **{a.name}** (id: `{a.agent_id}`): {a.role}")
     roster = "\n".join(roster_lines)
 
-    for mgr_id in ("manny", "rory", "innes", "perry", "jerry"):
-        mgr = registry.get(mgr_id)
-        if mgr and hasattr(mgr, "update_team_roster"):
-            mgr.update_team_roster(roster)
-            logger.info("Refreshed team roster for %s (%d agents)", mgr_id, len(roster_lines))
+    team_roles = build_fixed_team_roles(team_structure) if team_structure else ""
+    routing_guide = build_routing_guide(team_structure) if team_structure else ""
+
+    for agent in registry.get_all():
+        if hasattr(agent, "update_team_roster"):
+            agent.update_team_roster(roster, team_roles=team_roles, routing_guide=routing_guide)
+            logger.info("Refreshed team roster for %s (%d agents)", agent.agent_id, len(roster_lines))
 
 
 @router.get("/config")
@@ -124,7 +165,8 @@ async def get_agents_config(request: Request):
     """Return all agents with their configuration."""
     registry = request.app.state.registry
     agents = []
-    fixed_ids = {"manny", "rory", "innes", "perry", "jerry"}
+    ts = getattr(request.app.state, "team_structure", None)
+    fixed_ids = ts.get_fixed_ids() if ts else {"manny", "rory", "innes", "perry", "jerry"}
     for agent in registry.get_all():
         agents.append({
             "id": agent.agent_id,
@@ -169,6 +211,9 @@ async def add_agent(body: AddAgentRequest, request: Request):
         worktrees_dir=worktrees_dir,
         memory_manager=getattr(request.app.state, "memory_manager", None),
         knowledge_base=getattr(request.app.state, "knowledge_base", None),
+        container_manager=getattr(request.app.state, "container_manager", None),
+        project_store=request.app.state.project_store,
+        team_structure=getattr(request.app.state, "team_structure", None),
     )
 
     logger.info("Added new agent: %s (%s)", body.name, body.role)
@@ -179,7 +224,8 @@ async def add_agent(body: AddAgentRequest, request: Request):
 async def remove_agent(agent_id: str, request: Request):
     """Remove a custom agent. Fixed agents cannot be removed."""
     registry = request.app.state.registry
-    fixed_ids = {"manny", "rory", "innes", "perry", "jerry"}
+    ts = getattr(request.app.state, "team_structure", None)
+    fixed_ids = ts.get_fixed_ids() if ts else {"manny", "rory", "innes", "perry", "jerry"}
 
     if agent_id in fixed_ids:
         return {"error": "Cannot remove fixed agents"}
@@ -191,45 +237,17 @@ async def remove_agent(agent_id: str, request: Request):
     await agent.stop()
     registry._agents.pop(agent_id, None)
 
-    _remove_agent_from_config(agent_id)
-    refresh_manager_rosters(registry)
+    # Remove from project-scoped storage
+    project_store = request.app.state.project_store
+    if project_store:
+        active_id = project_store.get_active_project_id()
+        if active_id:
+            project_store.remove_custom_agent(active_id, agent_id)
+
+    ts = getattr(request.app.state, "team_structure", None)
+    refresh_manager_rosters(registry, team_structure=ts)
 
     logger.info("Removed agent: %s", agent_id)
     return {"status": "removed", "agent_id": agent_id}
 
 
-def _save_agent_to_config_file(name, role, system_prompt, model, allowed_tools):
-    """Append agent to team_config.yaml."""
-    try:
-        with open(TEAM_CONFIG_FILE) as f:
-            config = yaml.safe_load(f) or {}
-
-        custom = config.setdefault("agents", {}).setdefault("custom", [])
-        if not any(a.get("name") == name for a in custom):
-            custom.append({
-                "name": name,
-                "role": role,
-                "system_prompt": system_prompt or f"You are a {role}.",
-                "model": model,
-                "allowed_tools": allowed_tools,
-            })
-
-        with open(TEAM_CONFIG_FILE, "w") as f:
-            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
-    except Exception:
-        logger.exception("Failed to save agent to config file")
-
-
-def _remove_agent_from_config(agent_id: str):
-    """Remove agent from team_config.yaml."""
-    try:
-        with open(TEAM_CONFIG_FILE) as f:
-            config = yaml.safe_load(f) or {}
-
-        custom = config.get("agents", {}).get("custom", [])
-        config["agents"]["custom"] = [a for a in custom if a.get("name") != agent_id]
-
-        with open(TEAM_CONFIG_FILE, "w") as f:
-            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
-    except Exception:
-        logger.exception("Failed to remove agent from config file")

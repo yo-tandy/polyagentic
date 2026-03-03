@@ -5,16 +5,15 @@ from pathlib import Path
 
 from core.agent import Agent
 from core.message import Message, MessageType
+from core.prompt_loader import load_prompt
 from config import CLAUDE_ALLOWED_TOOLS_NONE, DEFAULT_MODEL, CLAUDE_ALLOWED_TOOLS_DEV
 
 logger = logging.getLogger(__name__)
 
-PROMPT_PATH = Path(__file__).parent / "prompts" / "dev_manager.md"
-
 
 class DevManagerAgent(Agent):
     def __init__(self, model: str, messages_dir: Path, working_dir: Path):
-        prompt_template = PROMPT_PATH.read_text()
+        prompt_template = load_prompt("dev_manager")
         self._prompt_template = prompt_template  # keep raw template for re-rendering
         self._team_roster: str = ""
         super().__init__(
@@ -48,7 +47,7 @@ class DevManagerAgent(Agent):
         self._messages_dir = messages_dir
         self._worktrees_dir = worktrees_dir
 
-    def update_team_roster(self, roster_text: str):
+    def update_team_roster(self, roster_text: str, team_roles: str = "", routing_guide: str = ""):
         """Re-render system prompt with the current team roster.
 
         Can be called at startup and whenever agents are added/removed
@@ -56,18 +55,18 @@ class DevManagerAgent(Agent):
         automatically pick up the new prompt.
         """
         self._team_roster = roster_text
+        self._team_roles = team_roles
+        self._routing_guide = routing_guide
         self._render_system_prompt()
 
     def _render_system_prompt(self):
-        """Re-build system prompt from template + roster + memory."""
-        prompt = self._prompt_template.replace("{team_roster}", self._team_roster or "")
-        # Memory injection for dev_manager (stateless — always gets fresh system prompt)
-        if self._memory_manager:
-            memory = self._memory_manager.get_combined_memory(self.agent_id)
-            prompt = prompt.replace("{memory}", memory or "No memory recorded yet.")
-        else:
-            prompt = prompt.replace("{memory}", "No memory recorded yet.")
-        self.system_prompt = prompt
+        """Re-build system prompt from template + roster + roles + routing + memory."""
+        self.system_prompt = self._render_prompt_template(
+            self._prompt_template,
+            roster=self._team_roster or "",
+            team_roles=getattr(self, "_team_roles", ""),
+            routing_guide=getattr(self, "_routing_guide", ""),
+        )
 
     def _get_system_prompt_if_first_call(self) -> str | None:
         # Dev manager is stateless — always re-render and send system prompt

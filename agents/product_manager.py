@@ -5,16 +5,15 @@ from pathlib import Path
 
 from core.agent import Agent
 from core.message import Message, MessageType
+from core.prompt_loader import load_prompt
 from config import CLAUDE_ALLOWED_TOOLS_READONLY
 
 logger = logging.getLogger(__name__)
 
-PROMPT_PATH = Path(__file__).parent / "prompts" / "product_manager.md"
-
 
 class ProductManagerAgent(Agent):
     def __init__(self, model: str, messages_dir: Path, working_dir: Path):
-        prompt_template = PROMPT_PATH.read_text()
+        prompt_template = load_prompt("product_manager")
         self._prompt_template = prompt_template
         super().__init__(
             agent_id="product_manager",
@@ -27,15 +26,11 @@ class ProductManagerAgent(Agent):
             working_dir=working_dir,
         )
 
-    def update_team_roster(self, roster_text: str):
+    def update_team_roster(self, roster_text: str, team_roles: str = "", routing_guide: str = ""):
         """Re-render system prompt with the current team roster and memory."""
-        prompt = self._prompt_template.replace("{team_roster}", roster_text)
-        if self._memory_manager:
-            memory = self._memory_manager.get_combined_memory(self.agent_id)
-            prompt = prompt.replace("{memory}", memory or "No memory recorded yet.")
-        else:
-            prompt = prompt.replace("{memory}", "No memory recorded yet.")
-        self.system_prompt = prompt
+        self.system_prompt = self._render_prompt_template(
+            self._prompt_template, roster_text, team_roles=team_roles, routing_guide=routing_guide,
+        )
 
     async def _parse_response(self, result_text: str, original_msg: Message) -> list[Message]:
         messages = []

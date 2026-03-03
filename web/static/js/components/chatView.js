@@ -50,10 +50,16 @@ const ChatView = {
         }
         const div = document.createElement('div');
         div.className = `chat-message chat-message--${type}`;
-        div.innerHTML = `
-            <div class="chat-message__sender">${this._escapeHtml(sender)}</div>
-            <div>${this._escapeHtml(content)}</div>
-        `;
+
+        const senderEl = document.createElement('div');
+        senderEl.className = 'chat-message__sender';
+        senderEl.textContent = sender;
+        div.appendChild(senderEl);
+
+        const bodyEl = document.createElement('div');
+        bodyEl.className = 'chat-message__body';
+        bodyEl.innerHTML = this._renderMarkdown(content);
+        div.appendChild(bodyEl);
 
         // Render suggested answer buttons if present
         const suggestions = metadata?.suggested_answers;
@@ -108,5 +114,16 @@ const ChatView = {
         const d = document.createElement('div');
         d.textContent = text;
         return d.innerHTML;
+    },
+
+    _renderMarkdown(text) {
+        if (typeof marked !== 'undefined') {
+            try {
+                return marked.parse(text || '');
+            } catch (e) {
+                return this._escapeHtml(text || '');
+            }
+        }
+        return this._escapeHtml(text || '');
     }
 };

@@ -5,11 +5,10 @@ from pathlib import Path
 
 from core.agent import Agent
 from core.message import Message, MessageType
+from core.prompt_loader import load_prompt
 from config import CLAUDE_ALLOWED_TOOLS_DEV, DEFAULT_MODEL
 
 logger = logging.getLogger(__name__)
-
-PROMPT_PATH = Path(__file__).parent / "prompts" / "rory.md"
 
 
 class RoryAgent(Agent):
@@ -20,7 +19,7 @@ class RoryAgent(Agent):
     """
 
     def __init__(self, model: str, messages_dir: Path, working_dir: Path):
-        prompt_template = PROMPT_PATH.read_text()
+        prompt_template = load_prompt("rory")
         self._prompt_template = prompt_template
         super().__init__(
             agent_id="rory",
@@ -39,9 +38,12 @@ class RoryAgent(Agent):
         self._workspace_path = None
         self._messages_dir = None
         self._worktrees_dir = None
+        self._container_manager = None
+        self._project_store = None
 
     def configure_extras(self, registry, git_manager, session_store, workspace_path,
-                         messages_dir=None, worktrees_dir=None):
+                         messages_dir=None, worktrees_dir=None, container_manager=None,
+                         project_store=None, team_structure=None):
         """Provide dependencies needed for dynamic agent creation."""
         self._registry = registry
         self._git_manager = git_manager
@@ -49,11 +51,15 @@ class RoryAgent(Agent):
         self._workspace_path = workspace_path
         self._messages_dir = messages_dir
         self._worktrees_dir = worktrees_dir
+        self._container_manager = container_manager
+        self._project_store = project_store
+        self._team_structure = team_structure
 
-    def update_team_roster(self, roster_text: str):
+    def update_team_roster(self, roster_text: str, team_roles: str = "", routing_guide: str = ""):
         """Re-render system prompt with updated team roster."""
-        prompt = self._prompt_template.replace("{team_roster}", roster_text)
-        self.system_prompt = prompt
+        self.system_prompt = self._render_prompt_template(
+            self._prompt_template, roster_text, team_roles=team_roles, routing_guide=routing_guide,
+        )
 
     async def _parse_response(self, result_text: str, original_msg: Message) -> list[Message]:
         messages = []
@@ -89,6 +95,9 @@ class RoryAgent(Agent):
                         worktrees_dir=self._worktrees_dir,
                         memory_manager=self._memory_manager,
                         knowledge_base=self._knowledge_base,
+                        container_manager=self._container_manager,
+                        project_store=self._project_store,
+                        team_structure=getattr(self, "_team_structure", None),
                     )
                     logger.info("Rory recruited new agent: %s (%s)", name, role)
                 except Exception:

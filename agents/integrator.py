@@ -4,7 +4,6 @@ import logging
 from pathlib import Path
 
 from core.agent import Agent
-from core.message import Message, MessageType
 from core.prompt_loader import load_prompt
 from config import CLAUDE_ALLOWED_TOOLS_DEV
 
@@ -12,8 +11,16 @@ logger = logging.getLogger(__name__)
 
 
 class IntegratorAgent(Agent):
+    """Integrator agent — manages builds, deployments, and integration tasks.
+
+    Session-based (stateful). All action handling (delegate,
+    respond_to_user, update_task, write_document, etc.) is done
+    centrally via the ActionRegistry.
+    """
+
     def __init__(self, model: str, messages_dir: Path, working_dir: Path):
         prompt_template = load_prompt("integrator")
+        self._prompt_template = prompt_template
         super().__init__(
             agent_id="integrator",
             name="Integrator",
@@ -23,63 +30,12 @@ class IntegratorAgent(Agent):
             allowed_tools=CLAUDE_ALLOWED_TOOLS_DEV,
             messages_dir=messages_dir,
             working_dir=working_dir,
+            use_session=True,
         )
+        self._register_prompt_files("integrator")
 
-    async def _parse_response(self, result_text: str, original_msg: Message) -> list[Message]:
-        messages = []
-        actions = self._extract_actions(result_text)
-
-        # Handle common actions (memory, KB)
-        await self._handle_common_actions(actions)
-
-        if not actions:
-            messages.append(Message(
-                sender=self.agent_id,
-                recipient=original_msg.sender,
-                type=MessageType.RESPONSE,
-                content=result_text,
-                task_id=original_msg.task_id,
-                parent_message_id=original_msg.id,
-            ))
-            return messages
-
-        for action in actions:
-            action_type = action.get("action")
-
-            if action_type == "delegate":
-                messages.append(Message(
-                    sender=self.agent_id,
-                    recipient=action.get("to", ""),
-                    type=MessageType.TASK,
-                    content=action.get("task_description", ""),
-                    task_id=original_msg.task_id,
-                    parent_message_id=original_msg.id,
-                    metadata={"task_title": action.get("task_title", "")},
-                ))
-
-            elif action_type == "respond_to_user":
-                suggested = action.get("suggested_answers", [])
-                meta = {}
-                if suggested:
-                    meta["suggested_answers"] = suggested[:3]
-                messages.append(Message(
-                    sender=self.agent_id,
-                    recipient="user",
-                    type=MessageType.CHAT,
-                    content=action.get("message", result_text),
-                    task_id=original_msg.task_id,
-                    parent_message_id=original_msg.id,
-                    metadata=meta if meta else None,
-                ))
-
-        if not messages:
-            messages.append(Message(
-                sender=self.agent_id,
-                recipient=original_msg.sender,
-                type=MessageType.RESPONSE,
-                content=result_text,
-                task_id=original_msg.task_id,
-                parent_message_id=original_msg.id,
-            ))
-
-        return messages
+    def update_team_roster(self, roster_text: str, team_roles: str = "", routing_guide: str = ""):
+        """Re-render system prompt with updated team roster."""
+        self.system_prompt = self._render_prompt_template(
+            self._prompt_template, roster_text, team_roles=team_roles, routing_guide=routing_guide,
+        )

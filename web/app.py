@@ -30,6 +30,9 @@ def create_app(
         app.state.container_manager = app_state.get("container_manager")
         app.state.conversation_manager = app_state.get("conversation_manager")
         app.state.team_structure = app_state.get("team_structure")
+        app.state.action_registry = app_state.get("action_registry")
+        app.state.config_provider = app_state.get("config_provider")
+        app.state.team_structure_repo = app_state.get("team_structure_repo")
         app.state.project_store = project_store
         app.state.lifecycle_manager = lifecycle_manager
         yield

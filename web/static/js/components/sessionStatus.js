@@ -137,6 +137,11 @@ const SessionStatus = {
                         ${s.consecutive_errors} consecutive error(s)
                     </div>
                 ` : ''}
+                ${s.last_error ? `
+                    <div class="session-card__error">
+                        <strong>Last error:</strong> ${this._escapeHtml(s.last_error)}
+                    </div>
+                ` : ''}
                 <div class="session-card__meta">
                     <span>Session: ${sessionIdShort}</span>
                     <label class="session-model">

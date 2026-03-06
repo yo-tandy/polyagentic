@@ -50,7 +50,7 @@ async def close_conversation(conv_id: str, request: Request):
     await broker.deliver(msg)
 
     # Close immediately (don't wait for agent summary)
-    cm.close(conv_id)
+    await cm.close(conv_id)
 
     return {"status": "closed", "conversation_id": conv_id}
 
@@ -76,7 +76,7 @@ async def start_conversation(body: StartConversationRequest, request: Request):
             "existing": True,
         }
 
-    conv = cm.start(body.agent_id, goals=[], title=f"Chat with {body.agent_id}")
+    conv = await cm.start(body.agent_id, goals=[], title=f"Chat with {body.agent_id}")
 
     # Notify the agent that the user wants to talk
     broker = request.app.state.broker

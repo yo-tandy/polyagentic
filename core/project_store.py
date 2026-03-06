@@ -1,10 +1,16 @@
+"""Project store — DB-backed with in-memory cache.
+
+Still creates project directories on disk (needed for messages, worktrees,
+workspace). But project metadata, custom agents, and active-project state
+are all stored in the DB.
+"""
 from __future__ import annotations
 
-import json
 import logging
 import re
-from datetime import datetime, timezone
 from pathlib import Path
+
+from db.repositories.project_repo import ProjectRepository
 
 logger = logging.getLogger(__name__)
 
@@ -14,23 +20,33 @@ KB_CATEGORIES = ["specs", "design", "architecture", "planning", "history"]
 class ProjectStore:
     """Manages project lifecycle: create, list, switch, get current."""
 
-    def __init__(self, base_dir: Path):
+    def __init__(self, repo: ProjectRepository, base_dir: Path):
+        self._repo = repo
         self.base_dir = base_dir
         self.projects_dir = base_dir / "projects"
-        self.registry_path = base_dir / "projects.json"
         self.projects_dir.mkdir(parents=True, exist_ok=True)
-        self._registry = self._load_registry()
+        # In-memory cache of project dicts
+        self._cache: list[dict] = []
+        self._active_project_id: str | None = None
+
+    async def load(self) -> None:
+        """Load projects from DB into cache."""
+        records = await self._repo.list_all()
+        self._cache = [self._project_to_dict(r) for r in records]
+        active = await self._repo.get_active()
+        self._active_project_id = active.id if active else None
+        logger.info("Loaded %d projects from DB (active: %s)", len(self._cache), self._active_project_id)
 
     # ── CRUD ──
 
-    def create_project(self, name: str, description: str = "") -> dict:
+    async def create_project(self, name: str, description: str = "") -> dict:
         """Create a new project with isolated directory structure."""
         project_id = _slugify(name)
         if not project_id:
             raise ValueError("Project name must contain at least one alphanumeric character")
 
         # Ensure unique id
-        existing_ids = {p["id"] for p in self._registry.get("projects", [])}
+        existing_ids = {p["id"] for p in self._cache}
         if project_id in existing_ids:
             suffix = 2
             while f"{project_id}-{suffix}" in existing_ids:
@@ -38,159 +54,93 @@ class ProjectStore:
             project_id = f"{project_id}-{suffix}"
 
         project_dir = self.projects_dir / project_id
-        now = datetime.now(timezone.utc).isoformat()
 
-        # Create directory tree
-        for subdir in [
-            "messages",
-            "workspace",
-            "worktrees",
-            "memory",
-        ]:
+        # Create directory tree (still needed for file-based operations)
+        for subdir in ["messages", "workspace", "worktrees", "memory"]:
             (project_dir / subdir).mkdir(parents=True, exist_ok=True)
 
-        # Knowledge base directories
-        for cat in KB_CATEGORIES:
-            (project_dir / "docs" / cat).mkdir(parents=True, exist_ok=True)
-
-        # KB index
-        kb_index_path = project_dir / "docs" / "_index.json"
-        if not kb_index_path.exists():
-            kb_index_path.write_text(json.dumps({"documents": []}, indent=2))
-
-        # Project metadata
-        project_meta = {
-            "id": project_id,
-            "name": name,
-            "description": description,
-            "created_at": now,
-            "updated_at": now,
-            "status": "active",
-            "main_branch": "main",
-        }
-
-        meta_path = project_dir / "project.json"
-        meta_path.write_text(json.dumps(project_meta, indent=2))
-
-        # Empty tasks, sessions, and agents
-        (project_dir / "tasks.json").write_text("{}")
-        (project_dir / "sessions.json").write_text("{}")
-        (project_dir / "agents.json").write_text(json.dumps({"agents": []}, indent=2))
-
-        # Update registry
-        self._registry.setdefault("projects", []).append(project_meta)
-        self._save_registry()
-
-        logger.info("Created project '%s' (id: %s) at %s", name, project_id, project_dir)
+        # Write to DB
+        rec = await self._repo.create(
+            id=project_id, name=name, description=description,
+        )
+        project_meta = self._project_to_dict(rec)
+        self._cache.append(project_meta)
+        logger.info("Created project '%s' (id: %s)", name, project_id)
         return project_meta
 
     def list_projects(self) -> list[dict]:
-        return self._registry.get("projects", [])
+        return list(self._cache)
 
     def get_project(self, project_id: str) -> dict | None:
-        for p in self._registry.get("projects", []):
+        for p in self._cache:
             if p["id"] == project_id:
                 return p
         return None
 
     def get_active_project_id(self) -> str | None:
-        return self._registry.get("active_project_id")
+        return self._active_project_id
 
     def get_active_project(self) -> dict | None:
-        active_id = self.get_active_project_id()
-        if active_id:
-            return self.get_project(active_id)
+        if self._active_project_id:
+            return self.get_project(self._active_project_id)
         return None
 
-    def set_active_project(self, project_id: str):
+    async def set_active_project(self, project_id: str):
         if not self.get_project(project_id):
             raise ValueError(f"Project '{project_id}' not found")
-        self._registry["active_project_id"] = project_id
-        self._save_registry()
+        await self._repo.set_active(project_id)
+        self._active_project_id = project_id
         logger.info("Set active project to '%s'", project_id)
 
     def get_project_dir(self, project_id: str) -> Path:
         return self.projects_dir / project_id
 
-    def update_project(self, project_id: str, **kwargs) -> dict | None:
-        """Update project metadata fields (e.g., github_url)."""
-        project = self.get_project(project_id)
-        if not project:
+    async def update_project(self, project_id: str, **kwargs) -> dict | None:
+        rec = await self._repo.update(project_id, **kwargs)
+        if not rec:
             return None
-        project.update(kwargs)
-        project["updated_at"] = datetime.now(timezone.utc).isoformat()
-        self._save_registry()
+        updated = self._project_to_dict(rec)
+        # Update cache
+        for i, p in enumerate(self._cache):
+            if p["id"] == project_id:
+                self._cache[i] = updated
+                break
+        return updated
 
-        # Also update on-disk project.json
-        meta_path = self.get_project_dir(project_id) / "project.json"
-        if meta_path.exists():
-            try:
-                meta = json.loads(meta_path.read_text())
-                meta.update(kwargs)
-                meta["updated_at"] = project["updated_at"]
-                meta_path.write_text(json.dumps(meta, indent=2))
-            except (json.JSONDecodeError, OSError):
-                pass
-        return project
-
-    def delete_project(self, project_id: str) -> bool:
-        """Remove project from registry (does NOT delete files for safety)."""
-        projects = self._registry.get("projects", [])
-        original_len = len(projects)
-        self._registry["projects"] = [p for p in projects if p["id"] != project_id]
-        if len(self._registry["projects"]) == original_len:
+    async def delete_project(self, project_id: str) -> bool:
+        result = await self._repo.delete(project_id)
+        if not result:
             return False
-        if self._registry.get("active_project_id") == project_id:
-            self._registry["active_project_id"] = None
-        self._save_registry()
-        logger.info("Deleted project '%s' from registry", project_id)
+        self._cache = [p for p in self._cache if p["id"] != project_id]
+        if self._active_project_id == project_id:
+            self._active_project_id = None
+        logger.info("Deleted project '%s' from DB", project_id)
         return True
 
     # ── Custom agents (per-project) ──
 
-    def _agents_path(self, project_id: str) -> Path:
-        return self.get_project_dir(project_id) / "agents.json"
+    async def get_custom_agents(self, project_id: str) -> list[dict]:
+        records = await self._repo.get_custom_agents(project_id)
+        return [
+            {
+                "name": r.name,
+                "role": r.role,
+                "system_prompt": r.system_prompt,
+                "model": r.model,
+                "allowed_tools": r.allowed_tools,
+            }
+            for r in records
+        ]
 
-    def get_custom_agents(self, project_id: str) -> list[dict]:
-        """Return custom agent definitions for a project."""
-        path = self._agents_path(project_id)
-        if not path.exists():
-            return []
-        try:
-            data = json.loads(path.read_text())
-            return data.get("agents", [])
-        except (json.JSONDecodeError, OSError):
-            return []
-
-    def save_custom_agents(self, project_id: str, agents: list[dict]):
-        """Write the full custom agents list for a project."""
-        path = self._agents_path(project_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({"agents": agents}, indent=2))
-
-    def add_custom_agent(self, project_id: str, agent_def: dict):
-        """Append one custom agent to a project (skip if name exists)."""
-        agents = self.get_custom_agents(project_id)
-        if any(a.get("name") == agent_def.get("name") for a in agents):
-            return
-        agents.append(agent_def)
-        self.save_custom_agents(project_id, agents)
+    async def add_custom_agent(self, project_id: str, agent_def: dict):
+        await self._repo.add_custom_agent(project_id, agent_def)
         logger.info("Saved custom agent '%s' to project '%s'", agent_def.get("name"), project_id)
 
-    def remove_custom_agent(self, project_id: str, agent_name: str):
-        """Remove one custom agent from a project."""
-        agents = self.get_custom_agents(project_id)
-        agents = [a for a in agents if a.get("name") != agent_name]
-        self.save_custom_agents(project_id, agents)
+    async def remove_custom_agent(self, project_id: str, agent_name: str):
+        await self._repo.remove_custom_agent(project_id, agent_name)
         logger.info("Removed custom agent '%s' from project '%s'", agent_name, project_id)
 
-    # ── Path helpers ──
-
-    def get_tasks_path(self, project_id: str) -> Path:
-        return self.get_project_dir(project_id) / "tasks.json"
-
-    def get_sessions_path(self, project_id: str) -> Path:
-        return self.get_project_dir(project_id) / "sessions.json"
+    # ── Path helpers (still file-based) ──
 
     def get_messages_dir(self, project_id: str) -> Path:
         return self.get_project_dir(project_id) / "messages"
@@ -208,21 +158,22 @@ class ProjectStore:
         return self.get_project_dir(project_id) / "memory"
 
     def get_team_structure_path(self, project_id: str) -> Path:
-        """Return the path for a project-level team structure override."""
         return self.get_project_dir(project_id) / "team_structure.yaml"
 
-    # ── Internals ──
+    # ── Helpers ──
 
-    def _load_registry(self) -> dict:
-        if self.registry_path.exists():
-            try:
-                return json.loads(self.registry_path.read_text())
-            except (json.JSONDecodeError, OSError):
-                pass
-        return {"active_project_id": None, "projects": []}
-
-    def _save_registry(self):
-        self.registry_path.write_text(json.dumps(self._registry, indent=2))
+    @staticmethod
+    def _project_to_dict(rec) -> dict:
+        return {
+            "id": rec.id,
+            "name": rec.name,
+            "description": rec.description or "",
+            "created_at": rec.created_at.isoformat() if rec.created_at else "",
+            "updated_at": rec.updated_at.isoformat() if rec.updated_at else "",
+            "status": rec.status or "active",
+            "main_branch": rec.main_branch or "main",
+            "github_url": rec.github_url,
+        }
 
 
 def _slugify(text: str) -> str:

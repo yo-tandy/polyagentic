@@ -1,3 +1,9 @@
+"""Message broker — hybrid file + DB design.
+
+File-based inbox/outbox is KEPT for Claude CLI subprocess boundary.
+Activity log and chat history are now DB-backed via MessageRepository.
+In-memory deques are kept as a write-behind cache for WS broadcast speed.
+"""
 from __future__ import annotations
 
 import asyncio
@@ -8,11 +14,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from core.message import Message, MessageType
-from config import POLL_INTERVAL_SECONDS, DEMO_PAUSE_INTERVAL
 
 if TYPE_CHECKING:
     from core.agent_registry import AgentRegistry
     from core.task_board import TaskBoard
+    from db.repositories.message_repo import MessageRepository
+    from db.config_provider import ConfigProvider
 
 logger = logging.getLogger(__name__)
 
@@ -21,9 +28,19 @@ MAX_CHAT_HISTORY = 200
 
 
 class MessageBroker:
-    def __init__(self, messages_dir: Path, registry: AgentRegistry):
+    def __init__(
+        self,
+        messages_dir: Path,
+        registry: AgentRegistry,
+        message_repo: MessageRepository | None = None,
+        project_id: str = "",
+        config: ConfigProvider | None = None,
+    ):
         self.messages_dir = messages_dir
         self.registry = registry
+        self._message_repo = message_repo
+        self._project_id = project_id
+        self._config = config
         self._running = False
         self._ws_clients: list = []
         self._activity_log: deque[dict] = deque(maxlen=MAX_ACTIVITY_LOG)
@@ -32,6 +49,16 @@ class MessageBroker:
         self._conversation_manager = None
         self._checkpoint_agent = "jerry"
         self._last_demo_count = 0
+
+    def _get_poll_interval(self) -> float:
+        if self._config:
+            return self._config.get("POLL_INTERVAL_SECONDS", 1.0)
+        return 1.0
+
+    def _get_demo_pause_interval(self) -> int:
+        if self._config:
+            return self._config.get("DEMO_PAUSE_INTERVAL", 5)
+        return 5
 
     def set_task_board(self, task_board: TaskBoard):
         self._task_board = task_board
@@ -45,10 +72,11 @@ class MessageBroker:
 
     async def start(self):
         self._running = True
-        logger.info("Message broker started (polling every %.1fs)", POLL_INTERVAL_SECONDS)
+        poll = self._get_poll_interval()
+        logger.info("Message broker started (polling every %.1fs)", poll)
         while self._running:
             await self._poll_cycle()
-            await asyncio.sleep(POLL_INTERVAL_SECONDS)
+            await asyncio.sleep(poll)
 
     async def stop(self):
         self._running = False
@@ -79,6 +107,22 @@ class MessageBroker:
                         "task_id": msg.task_id,
                     }
                     self._activity_log.append(activity)
+
+                    # Log to DB (fire-and-forget)
+                    if self._message_repo:
+                        try:
+                            await self._message_repo.log_activity(
+                                project_id=self._project_id,
+                                message_id=msg.id,
+                                sender=msg.sender,
+                                recipient=msg.recipient,
+                                msg_type=msg.type.value,
+                                content_preview=msg.content[:200],
+                                task_id=msg.task_id,
+                            )
+                        except Exception:
+                            logger.debug("Failed to log activity to DB", exc_info=True)
+
                     await self.broadcast_event({
                         "event_type": "new_message",
                         "data": activity,
@@ -112,27 +156,65 @@ class MessageBroker:
                 }
                 self._activity_log.append(activity)
 
+                # If this is a task-related status update (has task_id,
+                # no suggested_answers, no active conversation), route it
+                # to the task's progress notes instead of the main chat.
+                meta = message.metadata or {}
+                has_suggested = bool(meta.get("suggested_answers"))
+                conv = None
+                if self._conversation_manager:
+                    meta_cid = meta.get("conversation_id")
+                    if meta_cid:
+                        conv = self._conversation_manager.get_conversation(meta_cid)
+                    if not conv:
+                        conv = self._conversation_manager.get_by_agent(message.sender)
+
+                if message.task_id and not has_suggested and not conv and self._task_board:
+                    # Route to task progress notes — not the chat window
+                    await self._task_board.update_task(
+                        message.task_id,
+                        progress_note=message.content,
+                        _agent_id=message.sender,
+                    )
+                    logger.info(
+                        "Routed %s response to task %s progress notes",
+                        message.sender, message.task_id,
+                    )
+                    return
+
                 chat_event = {
                     "message_id": message.id,
                     "sender": message.sender,
                     "content": message.content,
                     "timestamp": message.timestamp,
                     "task_id": message.task_id,
-                    "metadata": message.metadata or {},
+                    "metadata": meta,
                 }
 
-                # Tag with conversation_id if sender is the active conversation agent
-                conv = (
-                    self._conversation_manager.get_active()
-                    if self._conversation_manager else None
-                )
-                if conv and message.sender == conv["agent_id"]:
+                if conv:
                     chat_event["conversation_id"] = conv["id"]
-                    self._conversation_manager.record_message(
-                        message.sender, message.content,
+                    await self._conversation_manager.record_message(
+                        message.sender, message.content, conv_id=conv["id"],
                     )
 
                 self._chat_history.append(chat_event)
+
+                # Log chat to DB
+                if self._message_repo:
+                    try:
+                        await self._message_repo.log_chat(
+                            project_id=self._project_id,
+                            message_id=message.id,
+                            sender=message.sender,
+                            recipient="user",
+                            msg_type=message.type.value,
+                            content=message.content,
+                            task_id=message.task_id,
+                            metadata_json=meta,
+                            conversation_id=chat_event.get("conversation_id"),
+                        )
+                    except Exception:
+                        logger.debug("Failed to log chat to DB", exc_info=True)
 
                 await self.broadcast_event({
                     "event_type": "chat_response",
@@ -186,8 +268,9 @@ class MessageBroker:
         if not self._task_board or message.type != MessageType.RESPONSE:
             return
         from core.task import TaskStatus
+        demo_interval = self._get_demo_pause_interval()
         done_count = len(self._task_board.get_tasks_by_status(TaskStatus.DONE))
-        if done_count > 0 and done_count % DEMO_PAUSE_INTERVAL == 0 and done_count != self._last_demo_count:
+        if done_count > 0 and done_count % demo_interval == 0 and done_count != self._last_demo_count:
             self._last_demo_count = done_count
             await self._trigger_demo_pause(done_count)
 

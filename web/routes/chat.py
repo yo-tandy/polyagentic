@@ -70,7 +70,7 @@ async def send_conversation_message(body: ChatRequest, request: Request):
     )
 
     await broker.deliver(msg)
-    cm.record_message("user", body.message, conv_id=active_conv["id"])
+    await cm.record_message("user", body.message, conv_id=active_conv["id"])
 
     broker._chat_history.append({
         "message_id": msg.id,

@@ -11,6 +11,7 @@ const TaskBoard = {
     _highlightedAgent: null,
     _currentTaskId: null,
     _refreshInterval: null,
+    _lastTaskJson: null,
 
     init(containerId) {
         this.container = document.getElementById(containerId);
@@ -135,6 +136,7 @@ const TaskBoard = {
 
     _closeTaskDetail() {
         this._currentTaskId = null;
+        this._lastTaskJson = null;
         const modal = document.getElementById('task-detail-modal');
         modal?.classList.remove('active');
         if (this._refreshInterval) {
@@ -149,8 +151,13 @@ const TaskBoard = {
         if (!task || task.error) {
             const body = document.getElementById('task-detail-body');
             if (body) body.innerHTML = '<p style="color: var(--red);">Task not found.</p>';
+            this._lastTaskJson = null;
             return;
         }
+        // Skip re-render if data hasn't changed
+        const taskJson = JSON.stringify(task);
+        if (taskJson === this._lastTaskJson) return;
+        this._lastTaskJson = taskJson;
         this._renderTaskDetail(task);
     },
 
@@ -173,7 +180,7 @@ const TaskBoard = {
         html += `
             <div class="modal__section">
                 <h3 class="modal__section-title">Description</h3>
-                <div class="task-detail__description">${this._escapeHtml(task.description || 'No description')}</div>
+                <div class="task-detail__description kb-markdown">${this._renderMarkdown(task.description || 'No description')}</div>
             </div>
         `;
 
@@ -325,6 +332,20 @@ const TaskBoard = {
         const d = document.createElement('div');
         d.textContent = text;
         return d.innerHTML;
+    },
+
+    _renderMarkdown(text) {
+        if (!text) return '';
+        if (typeof marked !== 'undefined') {
+            try {
+                marked.setOptions({ breaks: true, gfm: true });
+                return marked.parse(text);
+            } catch (e) {
+                console.error('Markdown parse error:', e);
+                return this._escapeHtml(text);
+            }
+        }
+        return this._escapeHtml(text);
     },
 
     _formatTime(isoStr) {

@@ -48,3 +48,4 @@ When reviewing code:
 - Always report integration results back to the requesting agent
 - When conflicts arise, attempt to resolve them before escalating
 - Track repo state and PR history in your memory
+- **After completing infrastructure work (repo setup, merges, etc.), delegate the next step.** Use the `delegate` action to assign follow-up tasks to the developers or team members whose work depends on what you just set up. Don't let the workflow stall

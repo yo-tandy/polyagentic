@@ -40,6 +40,7 @@ async def get_sessions(request: Request):
             "last_used_at": info.get("last_used_at"),
             "paused_at": info.get("paused_at"),
             "killed_at": info.get("killed_at"),
+            "last_error": agent.last_error,
         })
 
     return {"sessions": result}
@@ -57,7 +58,7 @@ async def pause_session(agent_id: str, request: Request):
             {"error": f"No agent found with id '{agent_id}'"}, status_code=404
         )
 
-    session_store.set_state(agent_id, SessionState.PAUSED)
+    await session_store.set_state(agent_id, SessionState.PAUSED)
 
     await broker.broadcast_event({
         "event_type": "session_status",
@@ -85,10 +86,8 @@ async def resume_session(agent_id: str, request: Request):
             {"error": f"No session data for agent '{agent_id}'"}, status_code=404
         )
 
-    session_store.set_state(agent_id, SessionState.ACTIVE)
-    # Reset consecutive errors on manual resume
-    info["consecutive_errors"] = 0
-    session_store.save()
+    await session_store.set_state(agent_id, SessionState.ACTIVE)
+    # Reset consecutive errors on manual resume — handled by set_state
 
     await broker.broadcast_event({
         "event_type": "session_status",
@@ -115,7 +114,7 @@ async def kill_session(agent_id: str, request: Request):
             {"error": f"No session data for agent '{agent_id}'"}, status_code=404
         )
 
-    session_store.set_state(agent_id, SessionState.KILLED)
+    await session_store.set_state(agent_id, SessionState.KILLED)
 
     await broker.broadcast_event({
         "event_type": "session_status",
@@ -137,7 +136,7 @@ async def reset_session(agent_id: str, request: Request):
             {"error": f"No agent found with id '{agent_id}'"}, status_code=404
         )
 
-    session_store.clear_session(agent_id)
+    await session_store.clear_session(agent_id)
 
     await broker.broadcast_event({
         "event_type": "session_status",
@@ -158,7 +157,7 @@ async def pause_all_sessions(request: Request):
     for agent in registry.get_all():
         if not agent.use_session:
             continue
-        session_store.set_state(agent.agent_id, SessionState.PAUSED)
+        await session_store.set_state(agent.agent_id, SessionState.PAUSED)
         paused.append(agent.agent_id)
 
     await broker.broadcast_event({
@@ -182,9 +181,7 @@ async def resume_all_sessions(request: Request):
             continue
         info = session_store.get_info(agent.agent_id)
         if info and info.get("state") == SessionState.PAUSED.value:
-            session_store.set_state(agent.agent_id, SessionState.ACTIVE)
-            info["consecutive_errors"] = 0
-            session_store.save()
+            await session_store.set_state(agent.agent_id, SessionState.ACTIVE)
             resumed.append(agent.agent_id)
 
     await broker.broadcast_event({
@@ -223,7 +220,7 @@ async def set_model(agent_id: str, request: Request):
 
     # Persist model override to session store (survives restart)
     session_store = request.app.state.session_store
-    session_store.set_model(agent_id, model)
+    await session_store.set_model(agent_id, model)
 
     await broker.broadcast_event({
         "event_type": "session_status",

@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from core.message import Message, MessageType
@@ -27,7 +28,7 @@ async def get_agent(agent_id: str, request: Request):
     registry = request.app.state.registry
     agent = registry.get(agent_id)
     if agent is None:
-        return {"error": "Agent not found"}, 404
+        return JSONResponse({"error": "Agent not found"}, status_code=404)
     return agent.to_info_dict()
 
 
@@ -39,7 +40,7 @@ async def send_agent_message(agent_id: str, body: AgentMessageRequest, request: 
 
     agent = registry.get(agent_id)
     if agent is None:
-        return {"error": f"Agent '{agent_id}' not found"}, 404
+        return JSONResponse({"error": f"Agent '{agent_id}' not found"}, status_code=404)
 
     msg = Message(
         sender="user",
@@ -60,7 +61,7 @@ async def request_agent_status(agent_id: str, request: Request):
 
     agent = registry.get(agent_id)
     if agent is None:
-        return {"error": f"Agent '{agent_id}' not found"}, 404
+        return JSONResponse({"error": f"Agent '{agent_id}' not found"}, status_code=404)
 
     tasks = task_board.get_tasks_by_assignee(agent_id)
     task_summary = "\n".join(

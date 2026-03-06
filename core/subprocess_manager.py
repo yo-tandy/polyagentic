@@ -56,12 +56,17 @@ class SubprocessManager:
         # may try to read file paths with its Read tool, which causes hangs
         # when --tools "" is set.  create_subprocess_exec passes args directly
         # without shell escaping so multiline content is safe.
-        if system_prompt and not session_id:
-            cmd += ["--system-prompt", system_prompt]
-            logger.info("System prompt: %d chars (inline)", len(system_prompt))
+        if system_prompt:
+            if session_id:
+                # Resumed session: append to refresh Claude's understanding of
+                # the protocol (especially action blocks for readonly agents).
+                cmd += ["--append-system-prompt", system_prompt]
+                logger.info("System prompt: %d chars (appended to resumed session)", len(system_prompt))
+            else:
+                cmd += ["--system-prompt", system_prompt]
+                logger.info("System prompt: %d chars (inline, fresh session)", len(system_prompt))
         else:
-            logger.info("No system prompt: system_prompt=%s, session_id=%s",
-                        bool(system_prompt), session_id)
+            logger.info("No system prompt: session_id=%s", session_id)
 
         return cmd
 
@@ -186,9 +191,12 @@ class SubprocessManager:
         new_session_id = data.get("session_id") or fallback_session_id
         cost = data.get("total_cost_usd") or data.get("cost_usd")
         duration = data.get("duration_ms")
-        input_tokens = data.get("input_tokens")
-        output_tokens = data.get("output_tokens")
         is_error = data.get("is_error", False)
+
+        # Token counts are nested under "usage" in the Claude CLI JSON output
+        usage = data.get("usage") or {}
+        input_tokens = usage.get("input_tokens")
+        output_tokens = usage.get("output_tokens")
 
         # When budget is exceeded, there may be no result field
         if not result_text and data.get("subtype") == "error_max_budget_usd":

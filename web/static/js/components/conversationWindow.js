@@ -116,9 +116,12 @@ const ConversationWindow = {
         let bodyHtml = '';
         if (!this._minimized && activeConv) {
             const goalsHtml = (activeConv.data.goals && activeConv.data.goals.length)
-                ? `<div class="conv-window__goals">${activeConv.data.goals.map(g =>
-                    `<span class="conv-window__goal">${this._escapeHtml(g)}</span>`
-                  ).join('')}</div>`
+                ? `<details class="conv-window__goals">
+                    <summary class="conv-window__goals-toggle">Conversation goals</summary>
+                    <ul class="conv-window__goals-list">${activeConv.data.goals.map(g =>
+                        `<li class="conv-window__goal">${this._escapeHtml(g)}</li>`
+                    ).join('')}</ul>
+                   </details>`
                 : '';
 
             bodyHtml = `

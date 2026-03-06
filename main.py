@@ -7,6 +7,7 @@ Usage: python main.py [--config team_config.yaml] [--port 8000]
 import argparse
 import asyncio
 import logging
+import os
 import signal
 import sys
 from pathlib import Path
@@ -17,12 +18,9 @@ import uvicorn
 # Ensure project root is on sys.path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from config import (
-    BASE_DIR, TEAM_CONFIG_FILE,
-    WEB_HOST, WEB_PORT, DEFAULT_MODEL,
-    CLAUDE_ALLOWED_TOOLS_DEV, PROJECTS_DIR, MEMORY_DIR,
-)
+from config import BASE_DIR, TEAM_CONFIG_FILE, WEB_HOST, WEB_PORT, DEFAULT_MODEL, CLAUDE_ALLOWED_TOOLS_DEV
 from core.agent_registry import AgentRegistry
+from core.action_registry import create_default_registry
 from core.message_broker import MessageBroker
 from core.session_store import SessionStore
 from core.task_board import TaskBoard
@@ -39,6 +37,19 @@ from core.team_structure import (
 from agents.custom_agent import create_custom_agent
 from core.message import Message, MessageType
 from web.app import create_app
+
+# DB imports
+from db import init_db, get_session_factory
+from db.config_provider import ConfigProvider
+from db.repositories.config_repo import ConfigRepository
+from db.repositories.project_repo import ProjectRepository
+from db.repositories.session_repo import SessionRepository
+from db.repositories.task_repo import TaskRepository
+from db.repositories.knowledge_repo import KnowledgeRepository
+from db.repositories.memory_repo import MemoryRepository
+from db.repositories.conversation_repo import ConversationRepository
+from db.repositories.message_repo import MessageRepository
+from db.repositories.team_structure_repo import TeamStructureRepository
 
 logging.basicConfig(
     level=logging.INFO,
@@ -66,9 +77,17 @@ def build_team_roster(registry: AgentRegistry) -> str:
 class ProjectLifecycleManager:
     """Manages project setup/teardown lifecycle."""
 
-    def __init__(self, project_store: ProjectStore, team_config: dict):
+    def __init__(
+        self,
+        project_store: ProjectStore,
+        team_config: dict,
+        config_provider: ConfigProvider,
+        session_factory,
+    ):
         self.project_store = project_store
         self.team_config = team_config
+        self._config = config_provider
+        self._sf = session_factory
         self.current_state: dict | None = None
         self._broker_task: asyncio.Task | None = None
 
@@ -77,7 +96,7 @@ class ProjectLifecycleManager:
         if self.current_state:
             await self._teardown()
 
-        self.project_store.set_active_project(project_id)
+        await self.project_store.set_active_project(project_id)
         state = await self._setup(project_id)
         self.current_state = state
         return state
@@ -90,7 +109,6 @@ class ProjectLifecycleManager:
         logger.info("Tearing down current project...")
         for agent in state["registry"].get_all():
             await agent.stop()
-        # Stop Docker containers for worker agents
         cm = state.get("container_manager")
         if cm:
             await cm.stop_all()
@@ -115,24 +133,58 @@ class ProjectLifecycleManager:
         messages_dir = ps.get_messages_dir(project_id)
         workspace_path = ps.get_workspace_dir(project_id)
         worktrees_dir = ps.get_worktrees_dir(project_id)
-        tasks_path = ps.get_tasks_path(project_id)
-        sessions_path = ps.get_sessions_path(project_id)
-        docs_dir = ps.get_docs_dir(project_id)
-        project_memory_dir = ps.get_project_memory_dir(project_id)
         main_branch = project.get("main_branch", "main")
 
         # Ensure directories
         messages_dir.mkdir(parents=True, exist_ok=True)
         worktrees_dir.mkdir(parents=True, exist_ok=True)
         (BASE_DIR / "logs" / "agents").mkdir(parents=True, exist_ok=True)
-        MEMORY_DIR.mkdir(parents=True, exist_ok=True)
 
-        # Core components
-        session_store = SessionStore(sessions_path)
-        task_board = TaskBoard(tasks_path)
+        # ── Create repositories ──
+        session_repo = SessionRepository(self._sf)
+        task_repo = TaskRepository(self._sf)
+        kb_repo = KnowledgeRepository(self._sf)
+        memory_repo = MemoryRepository(self._sf)
+        conv_repo = ConversationRepository(self._sf)
+        message_repo = MessageRepository(self._sf)
+
+        # ── Create DB-backed stores ──
+        session_store = SessionStore(session_repo, project_id)
+        await session_store.load()
+
+        task_board = TaskBoard(task_repo, project_id)
+        await task_board.load()
+
+        memory_manager = MemoryManager(
+            memory_repo,
+            project_id=project_id,
+            max_chars=self._config.get("MAX_MEMORY_CHARS", 2000),
+        )
+
+        repo_docs_dir = workspace_path / "docs"
+        knowledge_base = KnowledgeBase(
+            kb_repo, project_id,
+            repo_docs_dir=repo_docs_dir if repo_docs_dir.is_dir() else None,
+            max_summary_docs=self._config.get("MAX_INDEX_SUMMARY_DOCS", 30),
+        )
+        await knowledge_base.load()
+
+        conversation_manager = ConversationManager(conv_repo, project_id)
+        await conversation_manager.load()
+
+        # Load agent-specific config
+        for agent_id in ["manny", "dev_manager", "jerry"]:
+            await self._config.load_agent(agent_id)
+
+        # ── Non-DB components ──
         git_manager = GitManager(workspace_path, main_branch)
         registry = AgentRegistry()
-        broker = MessageBroker(messages_dir, registry)
+        broker = MessageBroker(
+            messages_dir, registry,
+            message_repo=message_repo,
+            project_id=project_id,
+            config=self._config,
+        )
         broker.set_task_board(task_board)
 
         # Wire task board → WebSocket broadcast on every update
@@ -142,11 +194,11 @@ class ProjectLifecycleManager:
                 "data": {"task_id": task_id},
             }))
         task_board.set_on_update(_task_update_broadcaster)
-        memory_manager = MemoryManager(MEMORY_DIR, project_memory_dir)
-        knowledge_base = KnowledgeBase(docs_dir)
 
-        # Conversation manager
-        conversation_manager = ConversationManager()
+        # Action registry (centralized action handling)
+        action_registry = create_default_registry()
+
+        # Wire conversation manager
         conversation_manager.set_broadcast(broker.broadcast_event)
         broker.set_conversation_manager(conversation_manager)
 
@@ -179,9 +231,12 @@ class ProjectLifecycleManager:
         # Apply model overrides from team_config.yaml (backward compat)
         tc_fixed = self.team_config.get("agents", {}).get("fixed", {})
 
+        # Get default model from config
+        default_model = self._config.get("DEFAULT_MODEL", DEFAULT_MODEL)
+        allowed_tools_dev = self._config.get("CLAUDE_ALLOWED_TOOLS_DEV", CLAUDE_ALLOWED_TOOLS_DEV)
+
         # ── Create agents from team structure (data-driven) ──
         for agent_id, agent_def in team_structure.get_enabled_agents().items():
-            # Allow team_config.yaml to override model (backward compat)
             tc_model = tc_fixed.get(agent_id, {}).get("model")
             if tc_model:
                 agent_def.model = tc_model
@@ -190,21 +245,21 @@ class ProjectLifecycleManager:
             registry.register(agent)
 
         # Custom agents from project-scoped storage
-        for agent_def in ps.get_custom_agents(project_id):
+        for agent_def in await ps.get_custom_agents(project_id):
             agent = create_custom_agent(
                 name=agent_def["name"],
                 role=agent_def.get("role", agent_def["name"]),
                 system_prompt=agent_def.get("system_prompt", f"You are a {agent_def.get('role', 'developer')}."),
-                model=agent_def.get("model", DEFAULT_MODEL),
-                allowed_tools=agent_def.get("allowed_tools", CLAUDE_ALLOWED_TOOLS_DEV),
+                model=agent_def.get("model", default_model),
+                allowed_tools=agent_def.get("allowed_tools", allowed_tools_dev),
                 messages_dir=messages_dir,
                 working_dir=workspace_path,
             )
             registry.register(agent)
 
-        # Configure all agents (before roster injection so memory_manager is available)
+        # Configure all agents
         for agent in registry.get_all():
-            agent.configure(session_store, broker, task_board, memory_manager, knowledge_base, conversation_manager)
+            agent.configure(session_store, broker, task_board, memory_manager, knowledge_base, conversation_manager, action_registry)
             agent._user_facing_agent = team_structure.user_facing_agent
 
         # Set privileged agents on task board
@@ -291,6 +346,9 @@ class ProjectLifecycleManager:
             project_id, len(registry.get_all()),
         )
 
+        # Team structure repository for API management
+        team_structure_repo = TeamStructureRepository(self._sf)
+
         return {
             "registry": registry,
             "broker": broker,
@@ -299,22 +357,39 @@ class ProjectLifecycleManager:
             "session_store": session_store,
             "team_config": self.team_config,
             "team_structure": team_structure,
+            "team_structure_repo": team_structure_repo,
             "memory_manager": memory_manager,
             "knowledge_base": knowledge_base,
             "container_manager": container_manager,
             "conversation_manager": conversation_manager,
+            "action_registry": action_registry,
             "project_id": project_id,
+            "config_provider": self._config,
         }
 
 
 async def run(config_path: Path, host: str, port: int):
     team_config = load_team_config(config_path)
 
-    # Initialize project store
-    project_store = ProjectStore(BASE_DIR)
+    # ── 1. Initialize database ──
+    await init_db()
+    sf = get_session_factory()
 
-    # Create lifecycle manager
-    lifecycle = ProjectLifecycleManager(project_store, team_config)
+    # ── 2. Seed config defaults + load config provider ──
+    config_repo = ConfigRepository(sf)
+    config_provider = ConfigProvider(config_repo)
+    await config_provider.seed_defaults()
+    await config_provider.load()
+
+    # ── 3. Initialize project store (DB-backed) ──
+    project_repo = ProjectRepository(sf)
+    project_store = ProjectStore(project_repo, BASE_DIR)
+    await project_store.load()
+
+    # ── 4. Create lifecycle manager ──
+    lifecycle = ProjectLifecycleManager(
+        project_store, team_config, config_provider, sf,
+    )
 
     # Activate a project
     active_project = project_store.get_active_project()
@@ -322,7 +397,7 @@ async def run(config_path: Path, host: str, port: int):
         state = await lifecycle.activate_project(active_project["id"])
     else:
         # No projects exist — create a starter project
-        project = project_store.create_project("My Project", "A new polyagentic project")
+        project = await project_store.create_project("My Project", "A new polyagentic project")
         state = await lifecycle.activate_project(project["id"])
 
     # Create FastAPI app
@@ -359,10 +434,13 @@ def main():
     parser.add_argument("--config", type=Path, default=TEAM_CONFIG_FILE,
                         help="Path to team config YAML")
     parser.add_argument("--host", type=str, default=WEB_HOST)
-    parser.add_argument("--port", type=int, default=WEB_PORT)
+    parser.add_argument("--port", type=int, default=None)
     args = parser.parse_args()
 
-    asyncio.run(run(args.config, args.host, args.port))
+    # PORT env var (set by autoPort in launch.json) takes priority over --port flag
+    port = int(os.environ.get("PORT", 0)) or args.port or WEB_PORT
+
+    asyncio.run(run(args.config, args.host, port))
 
 
 if __name__ == "__main__":

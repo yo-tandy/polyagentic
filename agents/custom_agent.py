@@ -4,7 +4,6 @@ import logging
 from pathlib import Path
 
 from core.agent import Agent
-from core.message import Message, MessageType
 from core.prompt_loader import load_prompt
 from config import CLAUDE_ALLOWED_TOOLS_DEV
 
@@ -43,63 +42,9 @@ def create_custom_agent(
 
 
 class CustomAgent(Agent):
-    async def _parse_response(self, result_text: str, original_msg: Message) -> list[Message]:
-        messages = []
-        actions = self._extract_actions(result_text)
+    """Dynamically created worker agent.
 
-        # Handle common actions (memory, KB)
-        await self._handle_common_actions(actions)
-
-        if not actions:
-            messages.append(Message(
-                sender=self.agent_id,
-                recipient=original_msg.sender,
-                type=MessageType.RESPONSE,
-                content=result_text,
-                task_id=original_msg.task_id,
-                parent_message_id=original_msg.id,
-            ))
-            return messages
-
-        for action in actions:
-            action_type = action.get("action")
-
-            if action_type == "delegate":
-                messages.append(Message(
-                    sender=self.agent_id,
-                    recipient=action.get("to", ""),
-                    type=MessageType.REDIRECT,
-                    content=action.get("task_description", ""),
-                    task_id=original_msg.task_id,
-                    parent_message_id=original_msg.id,
-                    metadata={"task_title": action.get("task_title", "")},
-                ))
-
-            elif action_type == "respond_to_user":
-                suggested = action.get("suggested_answers", [])
-                meta = {}
-                if suggested:
-                    meta["suggested_answers"] = suggested[:3]
-                messages.append(Message(
-                    sender=self.agent_id,
-                    recipient=original_msg.sender,
-                    type=MessageType.RESPONSE,
-                    content=action.get("message", result_text),
-                    task_id=original_msg.task_id,
-                    parent_message_id=original_msg.id,
-                    metadata=meta if meta else None,
-                ))
-
-            # update_memory, write_document handled by _handle_common_actions
-
-        if not messages:
-            messages.append(Message(
-                sender=self.agent_id,
-                recipient=original_msg.sender,
-                type=MessageType.RESPONSE,
-                content=result_text,
-                task_id=original_msg.task_id,
-                parent_message_id=original_msg.id,
-            ))
-
-        return messages
+    All action handling (respond_to_user, delegate, update_task, etc.)
+    is done centrally via the ActionRegistry.
+    """
+    pass

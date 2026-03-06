@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -30,12 +31,12 @@ async def list_projects(request: Request):
 async def create_project(body: CreateProjectRequest, request: Request):
     project_store = request.app.state.project_store
     if not project_store:
-        return {"error": "Project store not available"}, 500
+        return JSONResponse({"error": "Project store not available"}, status_code=503)
     try:
-        project = project_store.create_project(body.name, body.description)
+        project = await project_store.create_project(body.name, body.description)
         return {"status": "created", "project": project}
     except ValueError as e:
-        return {"error": str(e)}, 400
+        return JSONResponse({"error": str(e)}, status_code=400)
 
 
 @router.get("/projects/active")
@@ -52,11 +53,11 @@ async def activate_project(project_id: str, request: Request):
     lifecycle = request.app.state.lifecycle_manager
     project_store = request.app.state.project_store
     if not lifecycle or not project_store:
-        return {"error": "Lifecycle manager not available"}, 500
+        return JSONResponse({"error": "Lifecycle manager not available"}, status_code=503)
 
     project = project_store.get_project(project_id)
     if not project:
-        return {"error": f"Project '{project_id}' not found"}, 404
+        return JSONResponse({"error": f"Project '{project_id}' not found"}, status_code=404)
 
     try:
         new_state = await lifecycle.activate_project(project_id)
@@ -75,7 +76,7 @@ async def activate_project(project_id: str, request: Request):
         return {"status": "activated", "project": project}
     except Exception as e:
         logger.exception("Failed to activate project %s", project_id)
-        return {"error": str(e)}, 500
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 @router.get("/projects/active/info")
@@ -169,8 +170,8 @@ async def get_active_project_info(request: Request):
 async def get_project(project_id: str, request: Request):
     project_store = request.app.state.project_store
     if not project_store:
-        return {"error": "Project store not available"}, 500
+        return JSONResponse({"error": "Project store not available"}, status_code=503)
     project = project_store.get_project(project_id)
     if not project:
-        return {"error": f"Project '{project_id}' not found"}, 404
+        return JSONResponse({"error": f"Project '{project_id}' not found"}, status_code=404)
     return project

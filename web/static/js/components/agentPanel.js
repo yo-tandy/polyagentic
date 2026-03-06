@@ -33,6 +33,7 @@ const AgentPanel = {
                     </div>
                 </div>
                 <span class="agent-card__status status--${a.status}">${a.status}</span>
+                ${a.last_error ? `<div class="agent-card__error" title="${a.last_error.replace(/"/g, '&quot;')}">${a.last_error}</div>` : ''}
             </div>
         `).join('');
 

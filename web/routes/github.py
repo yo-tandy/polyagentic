@@ -34,7 +34,7 @@ async def create_repo(body: CreateRepoRequest, request: Request):
         project_store = request.app.state.project_store
         active_id = project_store.get_active_project_id()
         if active_id:
-            project_store.update_project(active_id, github_url=result["url"])
+            await project_store.update_project(active_id, github_url=result["url"])
 
         return {"status": "created", **result}
     except RuntimeError as e:

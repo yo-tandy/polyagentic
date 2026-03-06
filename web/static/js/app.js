@@ -160,6 +160,13 @@ const App = {
                 KnowledgePanel.load();
                 break;
 
+            case 'comments_updated':
+                // Refresh doc if user is viewing the affected document
+                if (KnowledgePanel._selectedDocId === event.data?.doc_id) {
+                    KnowledgePanel._loadAndRenderDoc(event.data.doc_id);
+                }
+                break;
+
             case 'session_status':
                 SessionStatus.handleSessionUpdate(event.data);
                 if (event.data.session_state === 'paused') {
@@ -191,10 +198,6 @@ const App = {
     async refreshTasks() {
         const res = await safeFetch('/api/tasks', { tasks: [] });
         TaskBoard.render(res.tasks || []);
-        // Also refresh the task detail modal if it's open
-        if (TaskBoard._currentTaskId) {
-            TaskBoard._refreshTaskDetail();
-        }
     },
 
     async refreshAgents() {

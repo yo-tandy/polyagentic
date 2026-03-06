@@ -54,7 +54,7 @@ async def update_task(task_id: str, body: TaskUpdateRequest, request: Request):
     if body.role is not None:
         updates["role"] = body.role
 
-    result = task_board.update_task(task_id, **updates)
+    result = await task_board.update_task(task_id, **updates)
     if result is None:
         return {"error": "Update failed (invalid transition?)"}
     return result.to_dict()

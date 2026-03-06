@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -9,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from core.message import Message, MessageType
+from core.prompt_loader import load_prompt_with_paths
 from core.subprocess_manager import SubprocessManager, DockerSubprocessManager
 from core.session_store import SessionStore
 from config import DEFAULT_MODEL, CLAUDE_ALLOWED_TOOLS_DEV
@@ -20,6 +22,7 @@ if TYPE_CHECKING:
     from core.task_board import TaskBoard
     from core.memory_manager import MemoryManager
     from core.knowledge_base import KnowledgeBase
+    from core.actions.registry import ActionRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +39,17 @@ class AgentStatus(str, Enum):
 
 
 class Agent:
+    # Base set of valid action names. Subclasses extend via _get_known_actions().
+    KNOWN_ACTIONS = {
+        "respond_to_user", "delegate", "update_task", "update_memory",
+        "write_document", "update_document", "resolve_comments",
+        "start_conversation", "end_conversation",
+    }
+
+    # Max "other team tasks" shown in prompt context.
+    # None = unlimited (for management agents that need full board visibility).
+    max_task_context_items: int | None = MAX_TASK_CONTEXT_ITEMS
+
     def __init__(
         self,
         agent_id: str,
@@ -69,6 +83,7 @@ class Agent:
         self.status = AgentStatus.OFFLINE
         self.current_task_id: str | None = None
         self.messages_processed = 0
+        self.last_error: str | None = None
         self.message_queue: asyncio.Queue[Message] = asyncio.Queue()
 
         if execution_mode == "container" and container_name:
@@ -81,9 +96,15 @@ class Agent:
         self._memory_manager: MemoryManager | None = None
         self._knowledge_base: KnowledgeBase | None = None
         self._conversation_manager = None
+        self._action_registry: ActionRegistry | None = None
         self._user_facing_agent: str = "manny"
         self._loop_task: asyncio.Task | None = None
         self._running = False
+
+        # Prompt hot-reload: track file modification times
+        self._prompt_name: str | None = None      # set by subclasses that want hot-reload
+        self._prompt_file_paths: list[Path] = []   # files in the inheritance chain
+        self._prompt_file_mtimes: dict[str, float] = {}  # path → last known mtime
 
     @property
     def inbox_dir(self) -> Path:
@@ -101,6 +122,7 @@ class Agent:
         memory_manager: MemoryManager | None = None,
         knowledge_base: KnowledgeBase | None = None,
         conversation_manager=None,
+        action_registry: ActionRegistry | None = None,
     ):
         self._session_store = session_store
         self._broker = broker
@@ -108,6 +130,7 @@ class Agent:
         self._memory_manager = memory_manager
         self._knowledge_base = knowledge_base
         self._conversation_manager = conversation_manager
+        self._action_registry = action_registry
 
     async def start(self):
         self.inbox_dir.mkdir(parents=True, exist_ok=True)
@@ -154,10 +177,11 @@ class Agent:
                     await self._broadcast_status()
                 await asyncio.sleep(1.0)
 
-            # Session kill: clear dead session so next invoke creates a fresh one
+            # Session kill: invalidate dead session so next invoke creates a fresh one
+            # (preserves accumulated stats — only the session ID is cleared)
             if (self.use_session and self._session_store
                     and self._session_store.is_killed(self.agent_id)):
-                self._session_store.clear_session(self.agent_id)
+                await self._session_store.invalidate_session(self.agent_id)
 
             self.status = AgentStatus.WORKING
             await self._broadcast_status()
@@ -166,7 +190,7 @@ class Agent:
             if msg.task_id and msg.type == MessageType.TASK and self._task_board:
                 task = self._task_board.get_task(msg.task_id)
                 if task and task.status in (TaskStatus.PENDING, TaskStatus.PAUSED):
-                    self._task_board.update_task(
+                    await self._task_board.update_task(
                         msg.task_id,
                         status=TaskStatus.IN_PROGRESS,
                         _agent_id=self.agent_id,
@@ -195,7 +219,7 @@ class Agent:
                         and msg.task_id and self._task_board):
                     task = self._task_board.get_task(msg.task_id)
                     if task and task.status == TaskStatus.IN_PROGRESS:
-                        self._task_board.update_task(
+                        await self._task_board.update_task(
                             msg.task_id,
                             status=TaskStatus.PAUSED,
                             _agent_id=self.agent_id,
@@ -234,13 +258,49 @@ class Agent:
                                 metadata={"command": "revision_requested"},
                             ))
 
+                # Auto-close enforcement: if agent processed a TASK message
+                # but didn't explicitly update the task status, auto-close it.
+                if (msg.type == MessageType.TASK and msg.task_id
+                        and self._task_board):
+                    task = self._task_board.get_task(msg.task_id)
+                    if task and task.status == TaskStatus.IN_PROGRESS:
+                        # Don't auto-close if agent delegated to another agent
+                        has_delegation = any(
+                            r.type == MessageType.TASK
+                            and r.recipient != self.agent_id
+                            for r in responses
+                        )
+                        # Don't auto-close if agent started a conversation
+                        has_conversation = bool(
+                            self._conversation_manager
+                            and self._conversation_manager.get_by_agent(self.agent_id)
+                        )
+                        if not has_delegation and not has_conversation:
+                            # Use agent's response as the completion summary
+                            summary = ""
+                            for r in responses:
+                                if r.content:
+                                    summary = r.content[:500]
+                                    break
+                            await self._task_board.update_task(
+                                msg.task_id,
+                                status=TaskStatus.DONE,
+                                _agent_id=self.agent_id,
+                                completion_summary=summary or "Task completed",
+                            )
+                            logger.info(
+                                "Auto-closed task %s for agent %s "
+                                "(agent did not emit update_task)",
+                                msg.task_id, self.agent_id,
+                            )
+
                 # Memory enforcement: remind agent to update memory after task completion
                 if msg.task_id and self._task_board:
                     task = self._task_board.get_task(msg.task_id)
                     if task and task.status in (TaskStatus.REVIEW, TaskStatus.DONE):
                         # Check if agent already emitted an update_memory action
                         has_memory_update = any(
-                            r.metadata.get("command") == "review_feedback" for r in responses
+                            (r.metadata or {}).get("command") == "review_feedback" for r in responses
                         ) is False  # not a reviewer-feedback flow
                         # Simple heuristic: check if any response text mentions update_memory
                         raw_text = " ".join(r.content for r in responses)
@@ -252,8 +312,9 @@ class Agent:
 
                 for response in responses:
                     await self._broker.deliver(response)
-            except Exception:
+            except Exception as exc:
                 logger.exception("Agent %s error processing message %s", self.agent_id, msg.id)
+                self.last_error = f"{type(exc).__name__}: {exc}"
                 self.status = AgentStatus.ERROR
                 await self._broadcast_status()
                 await asyncio.sleep(2)
@@ -270,16 +331,19 @@ class Agent:
                     await self._broadcast_status()
 
     async def process_message(self, msg: Message) -> list[Message]:
-        prompt = self._build_prompt(msg)
+        prompt = await self._build_prompt(msg)
 
-        # Only use session persistence if enabled for this agent
+        # Get system prompt first — may clear a stale session (prompt-hash mismatch)
+        system_prompt = await self._get_system_prompt_if_first_call()
+
+        # Fetch session_id AFTER prompt check (it may have been cleared above)
         session_id = None
         if self.use_session and self._session_store:
             session_id = self._session_store.get(self.agent_id)
 
         result = await self._subprocess.invoke(
             prompt=prompt,
-            system_prompt=self._get_system_prompt_if_first_call(),
+            system_prompt=system_prompt,
             model=self.model,
             allowed_tools=self.allowed_tools,
             session_id=session_id,
@@ -295,10 +359,10 @@ class Agent:
                 self.agent_id, session_id,
             )
             if self._session_store:
-                self._session_store.set(self.agent_id, "")
+                await self._session_store.set(self.agent_id, "")
             result = await self._subprocess.invoke(
                 prompt=prompt,
-                system_prompt=self._get_system_prompt_if_first_call(),
+                system_prompt=await self._get_system_prompt_if_first_call(),
                 model=self.model,
                 allowed_tools=self.allowed_tools,
                 session_id=None,
@@ -308,11 +372,17 @@ class Agent:
             )
 
         if self.use_session and result.session_id and self._session_store:
-            self._session_store.set(self.agent_id, result.session_id)
+            await self._session_store.set(self.agent_id, result.session_id)
+            # Store prompt hash so we can detect prompt changes later
+            prompt_for_hash = await self._build_full_system_prompt()
+            await self._session_store.set_prompt_hash(
+                self.agent_id,
+                hashlib.md5(prompt_for_hash.encode()).hexdigest()[:12],
+            )
 
         # Record subprocess stats (all agents, not just session-based ones)
         if self._session_store:
-            auto_paused = self._session_store.record_request(
+            auto_paused = await self._session_store.record_request(
                 self.agent_id,
                 duration_ms=result.duration_ms or 0,
                 is_error=result.is_error,
@@ -347,7 +417,72 @@ class Agent:
                 parent_message_id=msg.id,
             )]
 
-        return await self._parse_response(result.result_text, msg)
+        # Validate actions — retry once if agent used unknown action names
+        validated_text = await self._validate_result_actions(result.result_text)
+
+        return await self._parse_response(validated_text, msg)
+
+    async def _validate_result_actions(self, result_text: str) -> str:
+        """Check for unknown action types in the result; retry once with correction.
+
+        If the agent emitted action blocks with unrecognized names (after
+        normalization), send a correction prompt asking it to re-emit with
+        valid action names.  Returns corrected text, or original if no
+        unknown actions or retry fails.
+        """
+        actions = self._extract_actions(result_text)
+        if not actions:
+            return result_text
+
+        known = self._get_known_actions()
+        unknown = [a.get("action") for a in actions if a.get("action") not in known]
+        if not unknown:
+            return result_text
+
+        logger.warning(
+            "Agent %s used unknown action(s): %s — requesting correction",
+            self.agent_id, unknown,
+        )
+
+        valid_list = ", ".join(sorted(known))
+        correction = (
+            f"Your previous response contained unrecognized action(s): {', '.join(unknown)}. "
+            f"These are NOT valid actions and will be ignored.\n"
+            f"Valid actions are: {valid_list}.\n"
+            f"Please re-emit your response using only valid action names from the list above."
+        )
+
+        session_id = self._session_store.get(self.agent_id) if self._session_store else None
+        retry = await self._subprocess.invoke(
+            prompt=correction,
+            system_prompt=self._get_session_reminder(),
+            model=self.model,
+            allowed_tools=self.allowed_tools,
+            session_id=session_id,
+            working_dir=self.working_dir,
+            timeout=self.timeout,
+        )
+
+        # Record retry stats
+        if self._session_store:
+            await self._session_store.record_request(
+                self.agent_id,
+                duration_ms=retry.duration_ms or 0,
+                is_error=retry.is_error,
+                cost_usd=retry.cost_usd or 0.0,
+                input_tokens=retry.input_tokens or 0,
+                output_tokens=retry.output_tokens or 0,
+            )
+
+        if retry.is_error:
+            logger.warning(
+                "Agent %s action validation retry failed: %s",
+                self.agent_id, retry.result_text[:200],
+            )
+            return result_text  # Keep original if retry fails
+
+        logger.info("Agent %s action validation retry succeeded", self.agent_id)
+        return retry.result_text
 
     def _render_prompt_template(
         self,
@@ -356,35 +491,134 @@ class Agent:
         team_roles: str = "",
         routing_guide: str = "",
     ) -> str:
-        """Replace standard template variables in a prompt string."""
+        """Replace standard template variables in a prompt string.
+
+        Uses cached (sync) memory so this method stays sync-safe.
+        Full async memory is injected by ``_build_full_system_prompt``.
+        """
         prompt = template.replace("{team_roster}", roster)
         prompt = prompt.replace("{team_roles}", team_roles)
         prompt = prompt.replace("{routing_guide}", routing_guide)
         memory = ""
         if self._memory_manager:
-            memory = self._memory_manager.get_combined_memory(self.agent_id)
+            memory = self._memory_manager.get_combined_memory_sync(self.agent_id)
         prompt = prompt.replace("{memory}", memory or "No memory recorded yet.")
         return prompt
 
-    def _get_system_prompt_if_first_call(self) -> str | None:
+    def _get_known_actions(self) -> set[str]:
+        """Return the set of valid action names for this agent.
+
+        Delegates to the action registry when available; falls back to
+        the class-level ``KNOWN_ACTIONS`` for backward compatibility.
+        """
+        if self._action_registry:
+            return self._action_registry.get_allowed_action_names(self.agent_id)
+        return self.KNOWN_ACTIONS
+
+    def _get_session_reminder(self) -> str:
+        """Build a compact reminder for resumed sessions.
+
+        Includes the full list of valid action names so Claude doesn't
+        hallucinate wrong action names in long-running sessions.
+        """
+        actions = ", ".join(sorted(self._get_known_actions()))
+        return (
+            "CRITICAL PROTOCOL REMINDER: All outputs MUST use ```action fenced blocks. "
+            f"Valid actions: {actions}. "
+            "Use ONLY these exact action names — unknown names will be rejected. "
+            "You create documents via action blocks — the orchestrator handles "
+            "file I/O on your behalf. You do NOT need Write/Edit/Bash tools for documents. "
+            "Never say you lack file-writing tools."
+        )
+
+    async def _get_system_prompt_if_first_call(self) -> str | None:
+        prompt = await self._build_full_system_prompt()
         if self.use_session and self._session_store and self._session_store.get(self.agent_id):
-            return None  # --resume restores system prompt
-        # First call — inject memory into system prompt
+            # Check if system prompt has changed since session was created
+            current_hash = hashlib.md5(prompt.encode()).hexdigest()[:12]
+            stored_hash = self._session_store.get_prompt_hash(self.agent_id)
+            if stored_hash and current_hash == stored_hash:
+                # Prompt unchanged — append a compact reminder to the resumed session
+                # (subprocess_manager will use --append-system-prompt)
+                return self._get_session_reminder()
+            # Prompt changed — invalidate stale session so Claude gets the new prompt
+            # (preserves accumulated stats — only the session ID is cleared)
+            logger.info(
+                "Agent %s prompt changed (hash %s → %s), invalidating session",
+                self.agent_id, stored_hash, current_hash,
+            )
+            await self._session_store.invalidate_session(self.agent_id)
+        return prompt
+
+    def _register_prompt_files(self, prompt_name: str):
+        """Register prompt files for hot-reload monitoring."""
+        self._prompt_name = prompt_name
+        try:
+            _, paths = load_prompt_with_paths(prompt_name)
+            self._prompt_file_paths = paths
+            self._prompt_file_mtimes = {
+                str(p): p.stat().st_mtime for p in paths if p.exists()
+            }
+        except Exception as e:
+            logger.warning("Could not register prompt files for %s: %s", self.agent_id, e)
+
+    def _check_prompt_hot_reload(self):
+        """Reload prompt template from disk if any file in the chain changed."""
+        if not self._prompt_name or not self._prompt_file_paths:
+            return
+        # Check if any file has been modified
+        changed = False
+        for p in self._prompt_file_paths:
+            try:
+                current_mtime = p.stat().st_mtime
+            except OSError:
+                continue
+            stored = self._prompt_file_mtimes.get(str(p))
+            if stored is None or current_mtime > stored:
+                changed = True
+                break
+        if not changed:
+            return
+        # Reload the full prompt chain from disk
+        try:
+            new_template, new_paths = load_prompt_with_paths(self._prompt_name)
+        except Exception as e:
+            logger.warning("Hot-reload failed for %s: %s", self.agent_id, e)
+            return
+        self._prompt_template = new_template
+        self._prompt_file_paths = new_paths
+        self._prompt_file_mtimes = {
+            str(p): p.stat().st_mtime for p in new_paths if p.exists()
+        }
+        # Re-render system prompt with current roster/roles
+        if hasattr(self, "update_team_roster") and hasattr(self, "_team_roster"):
+            self.update_team_roster(
+                getattr(self, "_team_roster", ""),
+                team_roles=getattr(self, "_team_roles", ""),
+                routing_guide=getattr(self, "_routing_guide", ""),
+            )
+        else:
+            self.system_prompt = new_template
+        logger.info("Agent %s prompt hot-reloaded from disk", self.agent_id)
+
+    async def _build_full_system_prompt(self) -> str:
+        """Build the complete system prompt including memory."""
+        self._check_prompt_hot_reload()
         prompt = self.system_prompt
         if self._memory_manager:
-            memory = self._memory_manager.get_combined_memory(self.agent_id)
+            memory = await self._memory_manager.get_combined_memory(self.agent_id)
             if memory:
                 prompt += f"\n\n{memory}"
         return prompt
 
-    def _build_prompt(self, msg: Message) -> str:
+    async def _build_prompt(self, msg: Message) -> str:
         parts = []
 
         # 1. Memory context (for resumed sessions — first-call memory is in system prompt)
         if self._memory_manager and self.use_session:
             session_id = self._session_store.get(self.agent_id) if self._session_store else None
             if session_id:  # Resumed session — memory not in system prompt
-                memory = self._memory_manager.get_combined_memory(self.agent_id)
+                memory = await self._memory_manager.get_combined_memory(self.agent_id)
                 if memory:
                     parts.append(f"[Your Memory]\n{memory}\n---")
 
@@ -430,8 +664,11 @@ class Agent:
                 lines.append(f"  - [P{t.priority}] [{t.status.value}] {t.title} (id: {t.id}){review_marker}")
 
         if other_tasks:
-            # Truncate if too many
-            shown = other_tasks[:MAX_TASK_CONTEXT_ITEMS - len(my_tasks)]
+            limit = self.max_task_context_items
+            if limit is None:
+                shown = other_tasks
+            else:
+                shown = other_tasks[:max(0, limit - len(my_tasks))]
             lines.append("\nOTHER TEAM TASKS:")
             for t in shown:
                 assignee = t.assignee or "unassigned"
@@ -442,14 +679,58 @@ class Agent:
         return "\n".join(lines)
 
     async def _parse_response(self, result_text: str, original_msg: Message) -> list[Message]:
-        return [Message(
-            sender=self.agent_id,
-            recipient=original_msg.sender,
-            type=MessageType.RESPONSE,
-            content=result_text,
-            task_id=original_msg.task_id,
-            parent_message_id=original_msg.id,
-        )]
+        """Central response parser — dispatches all actions via the registry.
+
+        Replaces per-agent ``_parse_response`` overrides and the old
+        ``_handle_common_actions`` method.  Every action (messaging,
+        documents, memory, git, etc.) is handled through the registry.
+        """
+        actions = self._extract_actions(result_text)
+
+        if not actions:
+            # No action blocks found — sanitize and forward raw text
+            cleaned = self._sanitize_for_user(result_text)
+            if not cleaned.strip():
+                cleaned = result_text  # keep raw if sanitization removes everything
+            if cleaned.strip():
+                return [Message(
+                    sender=self.agent_id,
+                    recipient=original_msg.sender,
+                    type=MessageType.RESPONSE,
+                    content=cleaned,
+                    task_id=original_msg.task_id,
+                    parent_message_id=original_msg.id,
+                )]
+            return []
+
+        # Dispatch through the action registry
+        if self._action_registry:
+            messages = await self._action_registry.execute_all(
+                self, actions, original_msg,
+            )
+        else:
+            # Fallback: no registry — just return sanitized text
+            logger.warning(
+                "Agent %s has no action registry — cannot process actions",
+                self.agent_id,
+            )
+            messages = []
+
+        # Fallback: if actions were processed but no messages generated,
+        # send sanitized text (if any human-readable content remains)
+        if not messages:
+            cleaned = self._sanitize_for_user(result_text)
+            if cleaned.strip():
+                messages.append(Message(
+                    sender=self.agent_id,
+                    recipient=original_msg.sender,
+                    type=MessageType.RESPONSE,
+                    content=cleaned,
+                    task_id=original_msg.task_id,
+                    parent_message_id=original_msg.id,
+                ))
+
+        return messages
 
     # ── Shared action extraction (used by subclasses) ──
 
@@ -466,6 +747,11 @@ class Agent:
         "send_message": "respond_to_user",
         "assign": "delegate",
         "assign_task": "delegate",
+        "resolve_comment": "resolve_comments",
+        "conversation_summary": "end_conversation",
+        "close_conversation": "end_conversation",
+        "finish_conversation": "end_conversation",
+        "summarize_conversation": "end_conversation",
     }
 
     # Maps wrong field names to correct ones, per action type
@@ -487,6 +773,16 @@ class Agent:
             "value": "content",
             "text": "content",
             "key": "memory_type",
+        },
+        "write_document": {
+            "path": "title",
+            "name": "title",
+            "filename": "title",
+            "type": "category",
+        },
+        "resolve_comments": {
+            "comments": "resolutions",
+            "results": "resolutions",
         },
     }
 
@@ -556,29 +852,70 @@ class Agent:
 
         return actions
 
-    async def _handle_common_actions(self, actions: list[dict]) -> None:
-        """Process update_memory and write_document/update_document actions.
+    @staticmethod
+    def _sanitize_for_user(text: str) -> str:
+        """Strip action blocks and bare JSON from text before showing to user."""
+        # Remove fenced code blocks containing JSON
+        cleaned = re.sub(r'```\w*\s*\{.*?\}\s*```', '', text, flags=re.DOTALL)
+        # Remove bare JSON objects
+        cleaned = re.sub(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', '', cleaned)
+        # Remove [Saving to memory: ...] annotations
+        cleaned = re.sub(r'\[.*?(?:memory|saving|delegat).*?\]', '', cleaned, flags=re.IGNORECASE)
+        # Collapse excessive whitespace
+        cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+        return cleaned.strip()
 
-        Called from subclass _parse_response() methods. These actions
-        produce no outbound messages — they modify state directly.
+    async def _handle_common_actions(self, actions: list[dict]) -> None:
+        """Process actions that modify state without producing messages.
+
+        .. deprecated::
+            Kept for backward compatibility with any code that still
+            calls it directly.  All action handling now goes through
+            the :class:`ActionRegistry` in ``_parse_response``.
         """
+        if self._action_registry:
+            from core.actions.base import ActionContext
+            ctx = ActionContext()
+            for action in actions:
+                if action.get("action") == "update_document" and action.get("doc_id"):
+                    ctx.edited_doc_ids.add(action["doc_id"])
+            for action in actions:
+                await self._action_registry.execute(
+                    self, action, Message(sender="system", recipient=self.agent_id,
+                                         type=MessageType.SYSTEM, content=""), ctx,
+                )
+            if ctx.kb_changed and self._broker:
+                await self._broker.broadcast_event({
+                    "event_type": "knowledge_updated", "data": {},
+                })
+            return
+
+        # Legacy fallback (no registry)
         kb_changed = False
+        edited_doc_ids: set[str] = set()
+        for action in actions:
+            if action.get("action") == "update_document" and action.get("doc_id"):
+                edited_doc_ids.add(action["doc_id"])
+
         for action in actions:
             action_type = action.get("action")
 
             if action_type == "update_memory":
-                self._handle_memory_update(action)
+                await self._handle_memory_update(action)
 
             elif action_type == "write_document":
-                self._handle_write_document(action)
+                await self._handle_write_document(action)
                 kb_changed = True
 
             elif action_type == "update_document":
-                self._handle_update_document(action)
+                await self._handle_update_document(action)
                 kb_changed = True
 
+            elif action_type == "resolve_comments":
+                await self._handle_resolve_comments(action, edited_doc_ids)
+
             elif action_type == "update_task":
-                self._handle_update_task(action)
+                await self._handle_update_task(action)
 
             elif action_type == "start_conversation":
                 await self._handle_start_conversation(action)
@@ -593,7 +930,7 @@ class Agent:
                 "data": {},
             })
 
-    def _handle_memory_update(self, action: dict):
+    async def _handle_memory_update(self, action: dict):
         if not self._memory_manager:
             return
         memory_type = action.get("memory_type", "")
@@ -601,40 +938,112 @@ class Agent:
         if not content:
             return
         if memory_type == "personality":
-            self._memory_manager.update_personality_memory(self.agent_id, content)
+            await self._memory_manager.update_personality_memory(self.agent_id, content)
         elif memory_type == "project":
-            self._memory_manager.update_project_memory(self.agent_id, content)
+            await self._memory_manager.update_project_memory(self.agent_id, content)
         else:
             logger.warning("Unknown memory_type '%s' from %s", memory_type, self.agent_id)
 
-    def _handle_write_document(self, action: dict):
+    async def _handle_write_document(self, action: dict):
         if not self._knowledge_base:
             return
         title = action.get("title", "")
-        category = action.get("category", "")
+        category = action.get("category", "") or self._infer_doc_category(title)
         content = action.get("content", "")
-        if not title or not category or not content:
+        if not title or not content:
+            logger.warning(
+                "Agent %s write_document missing fields: title=%s, category=%s, content_len=%d",
+                self.agent_id, bool(title), bool(category), len(content),
+            )
             return
+        if not category:
+            category = "specs"  # default for documents without explicit category
         try:
-            self._knowledge_base.add_document(
+            await self._knowledge_base.add_document(
                 title=title, category=category,
                 content=content, created_by=self.agent_id,
             )
         except ValueError as e:
             logger.warning("KB write_document error from %s: %s", self.agent_id, e)
 
-    def _handle_update_document(self, action: dict):
+    @staticmethod
+    def _infer_doc_category(title: str) -> str:
+        """Infer document category from title/path when not explicitly provided."""
+        t = title.lower()
+        if any(k in t for k in ("spec", "requirement", "product")):
+            return "specs"
+        if any(k in t for k in ("arch", "design", "system")):
+            return "architecture"
+        if any(k in t for k in ("plan", "roadmap", "milestone")):
+            return "planning"
+        return ""
+
+    async def _handle_update_document(self, action: dict):
         if not self._knowledge_base:
             return
         doc_id = action.get("doc_id", "")
         content = action.get("content", "")
         if not doc_id or not content:
             return
-        self._knowledge_base.update_document(
+        await self._knowledge_base.update_document(
             doc_id=doc_id, content=content, updated_by=self.agent_id,
         )
 
-    def _handle_update_task(self, action: dict):
+    async def _handle_resolve_comments(
+        self, action: dict, edited_doc_ids: set[str] | None = None,
+    ):
+        """Agent resolves one or more comments on a document."""
+        if not self._knowledge_base:
+            return
+        doc_id = action.get("doc_id", "")
+        resolutions = action.get("resolutions", [])
+        if not doc_id or not resolutions:
+            logger.warning("Agent %s resolve_comments missing fields", self.agent_id)
+            return
+
+        edit_verified = bool(edited_doc_ids and doc_id in edited_doc_ids)
+        if not edit_verified:
+            logger.warning(
+                "Agent %s resolved comments on %s WITHOUT editing the document",
+                self.agent_id, doc_id,
+            )
+
+        resolved = await self._knowledge_base.resolve_comments(
+            doc_id, resolutions, edit_verified=edit_verified,
+        )
+        if resolved and self._broker:
+            logger.info(
+                "Agent %s resolved %d comment(s) on %s (edit_verified=%s)",
+                self.agent_id, len(resolved), doc_id, edit_verified,
+            )
+            await self._broker.broadcast_event({
+                "event_type": "comments_updated",
+                "data": {"doc_id": doc_id},
+            })
+
+        # Auto-complete the current task if all assigned comments are resolved
+        if resolved and self.current_task_id and self._task_board:
+            all_comments = await self._knowledge_base.get_comments(doc_id)
+            remaining = [
+                c for c in all_comments
+                if c["status"] == "open" and c.get("assigned_to") == self.agent_id
+            ]
+            if not remaining:
+                verified_str = "with verified edits" if edit_verified else "WITHOUT document edits (unverified)"
+                await self._task_board.update_task(
+                    self.current_task_id,
+                    status="done",
+                    _agent_id=self.agent_id,
+                    completion_summary=(
+                        f"Resolved {len(resolved)} comment(s) on \"{doc_id}\" {verified_str}."
+                    ),
+                )
+                logger.info(
+                    "Auto-completed task %s after resolving all comments",
+                    self.current_task_id,
+                )
+
+    async def _handle_update_task(self, action: dict):
         if not self._task_board:
             return
         task_id = action.get("task_id")
@@ -646,7 +1055,7 @@ class Agent:
                      "paused_summary", "labels", "outcome"):
             if key in action:
                 updates[key] = action[key]
-        self._task_board.update_task(task_id, **updates)
+        await self._task_board.update_task(task_id, **updates)
 
     async def _handle_start_conversation(self, action: dict):
         """Agent requests a direct conversation with the user."""
@@ -655,7 +1064,7 @@ class Agent:
             return
         goals = action.get("goals", [])
         title = action.get("title", "Conversation")
-        conv = self._conversation_manager.start(self.agent_id, goals, title)
+        conv = await self._conversation_manager.start(self.agent_id, goals, title)
 
         # Send CONVERSATION message to self with the conversation context
         if self._broker:
@@ -673,14 +1082,14 @@ class Agent:
         if not self._conversation_manager:
             return
         summary = action.get("summary", "")
-        conv = self._conversation_manager.close_by_agent(self.agent_id)
+        conv = await self._conversation_manager.close_by_agent(self.agent_id)
         if not conv:
             return
 
         # Save summary to knowledge base
         if summary and self._knowledge_base:
             try:
-                self._knowledge_base.add_document(
+                await self._knowledge_base.add_document(
                     title=conv.get("title", "Conversation Summary"),
                     category="specs",
                     content=summary,
@@ -720,7 +1129,7 @@ class Agent:
             })
 
     def to_info_dict(self) -> dict:
-        return {
+        info = {
             "id": self.agent_id,
             "name": self.name,
             "role": self.role,
@@ -729,3 +1138,6 @@ class Agent:
             "messages_processed": self.messages_processed,
             "model": self.model,
         }
+        if self.last_error:
+            info["last_error"] = self.last_error
+        return info

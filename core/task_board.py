@@ -1,11 +1,15 @@
+"""Task board — DB-backed with in-memory cache.
+
+All read methods are sync (cache-based) for hot-path performance.
+All write methods are async (hit DB + refresh cache).
+"""
 from __future__ import annotations
 
-import json
 import logging
 from datetime import datetime, timezone
-from pathlib import Path
 
 from core.task import Task, TaskStatus
+from db.repositories.task_repo import TaskRepository
 
 logger = logging.getLogger(__name__)
 
@@ -22,12 +26,21 @@ VALID_TRANSITIONS = {
 
 
 class TaskBoard:
-    def __init__(self, persistence_path: Path):
-        self.persistence_path = persistence_path
+    def __init__(self, repo: TaskRepository, project_id: str):
+        self._repo = repo
+        self._project_id = project_id
         self._tasks: dict[str, Task] = {}
         self._on_update_callback = None
         self._privileged_agents: set[str] = set(PRIVILEGED_AGENTS)
-        self.load()
+
+    async def load(self) -> None:
+        """Populate in-memory cache from DB at startup."""
+        records = await self._repo.get_all(self._project_id)
+        self._tasks = {}
+        for rec in records:
+            task = self._db_to_task(rec)
+            self._tasks[task.id] = task
+        logger.info("Loaded %d tasks from DB", len(self._tasks))
 
     def set_on_update(self, callback):
         """Set callback invoked after any task create/update. Signature: callback(task_id)."""
@@ -41,10 +54,10 @@ class TaskBoard:
         if self._on_update_callback:
             self._on_update_callback(task_id)
 
-    def create_task(self, title: str, description: str, created_by: str,
-                    assignee: str | None = None, role: str | None = None,
-                    parent_task_id: str | None = None,
-                    priority: int = 3, labels: list[str] | None = None) -> Task:
+    async def create_task(self, title: str, description: str, created_by: str,
+                          assignee: str | None = None, role: str | None = None,
+                          parent_task_id: str | None = None,
+                          priority: int = 3, labels: list[str] | None = None) -> Task:
         task = Task(
             title=title,
             description=description,
@@ -55,14 +68,29 @@ class TaskBoard:
             labels=labels or [],
             parent_task_id=parent_task_id,
         )
+        # Write to DB
+        await self._repo.create(
+            project_id=self._project_id,
+            id=task.id,
+            title=task.title,
+            description=task.description,
+            status=task.status.value,
+            assignee=task.assignee,
+            reviewer=task.reviewer,
+            role=task.role,
+            priority=task.priority,
+            labels=task.labels,
+            parent_task_id=task.parent_task_id,
+            created_by=task.created_by,
+        )
+        # Update cache
         self._tasks[task.id] = task
         if parent_task_id and parent_task_id in self._tasks:
             self._tasks[parent_task_id].subtasks.append(task.id)
-        self.save()
         self._notify(task.id)
         return task
 
-    def update_task(self, task_id: str, **kwargs) -> Task | None:
+    async def update_task(self, task_id: str, **kwargs) -> Task | None:
         task = self._tasks.get(task_id)
         if not task:
             return None
@@ -117,9 +145,23 @@ class TaskBoard:
             if hasattr(task, key):
                 setattr(task, key, value)
         task.touch()
-        self.save()
+
+        # Write to DB
+        db_kwargs = {}
+        for key, value in kwargs.items():
+            if key == "status" and isinstance(value, TaskStatus):
+                db_kwargs["status"] = value.value
+            elif hasattr(task, key):
+                db_kwargs[key] = value
+        if note_text:
+            db_kwargs["progress_note"] = note_text
+            db_kwargs["_agent_id"] = agent_id
+        await self._repo.update(task_id, **db_kwargs)
+
         self._notify(task_id)
         return task
+
+    # ── Reads (sync, from cache) ─────────────────────────────────
 
     def get_task(self, task_id: str) -> Task | None:
         return self._tasks.get(task_id)
@@ -134,10 +176,7 @@ class TaskBoard:
         return [t for t in self._tasks.values() if t.assignee == agent_id]
 
     def get_tasks_for_agent(self, agent_id: str, agent_role: str | None = None) -> list[Task]:
-        """Return agent's tasks ordered: review-for-me first, then by priority, then created_at.
-
-        Also includes unassigned pending tasks that match agent_role.
-        """
+        """Return agent's tasks ordered: review-for-me first, then by priority, then created_at."""
         tasks = []
         for t in self._tasks.values():
             if t.assignee == agent_id or t.reviewer == agent_id:
@@ -153,17 +192,24 @@ class TaskBoard:
 
         return sorted(tasks, key=sort_key)
 
-    def save(self):
-        data = {tid: t.to_dict() for tid, t in self._tasks.items()}
-        self.persistence_path.write_text(json.dumps(data, indent=2))
-
-    def load(self):
-        if self.persistence_path.exists():
-            try:
-                data = json.loads(self.persistence_path.read_text())
-                self._tasks = {tid: Task.from_dict(td) for tid, td in data.items()}
-            except (json.JSONDecodeError, OSError):
-                self._tasks = {}
-
     def to_summary(self) -> list[dict]:
         return [t.to_dict() for t in self._tasks.values()]
+
+    # ── DB → Task conversion ────────────────────────────────────
+
+    @staticmethod
+    def _db_to_task(rec) -> Task:
+        """Convert a TaskModel ORM object to a core.task.Task."""
+        return Task(
+            id=rec.id,
+            title=rec.title,
+            description=rec.description or "",
+            created_by=rec.created_by or "unknown",
+            assignee=rec.assignee,
+            role=rec.role,
+            priority=rec.priority or 3,
+            labels=rec.labels or [],
+            parent_task_id=rec.parent_task_id,
+            status=TaskStatus(rec.status) if rec.status else TaskStatus.PENDING,
+            reviewer=rec.reviewer,
+        )

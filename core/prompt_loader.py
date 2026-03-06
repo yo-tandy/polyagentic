@@ -85,3 +85,37 @@ def load_prompt(name: str, *, prompts_dir: Path | None = None) -> str:
             current_path = None
 
     return "\n\n".join(chain)
+
+
+def load_prompt_with_paths(name: str, *, prompts_dir: Path | None = None) -> tuple[str, list[Path]]:
+    """Like load_prompt, but also returns the list of file paths in the chain.
+
+    Returns:
+        (composed_prompt, [child_path, parent_path, ...])
+    """
+    p_dir = prompts_dir or PROMPTS_DIR
+    b_dir = (prompts_dir / "bases") if prompts_dir else BASES_DIR
+
+    start_path = _resolve_name(name, p_dir, b_dir)
+
+    chain: list[str] = []
+    paths: list[Path] = []
+    visited: set[str] = set()
+    current_path = start_path
+
+    while current_path is not None:
+        canon = str(current_path.resolve())
+        if canon in visited:
+            raise ValueError(f"Circular inheritance detected at {current_path}")
+        visited.add(canon)
+        paths.append(current_path)
+
+        parent_name, body = _parse_file(current_path)
+        chain.append(body)
+
+        if parent_name:
+            current_path = _resolve_name(parent_name, p_dir, b_dir)
+        else:
+            current_path = None
+
+    return "\n\n".join(chain), paths

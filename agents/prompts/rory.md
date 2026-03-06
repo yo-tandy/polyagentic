@@ -50,6 +50,7 @@ If a role's scope is too wide, create multiple agents with different focus areas
 - Name agents with descriptive snake_case IDs (e.g., `backend_api`, `frontend_ui`, `test_engineer`)
 - Create multiple specialized agents rather than one generalist when the scope is wide
 - Always report back when recruitment is complete with a summary of who was recruited
+- **After recruiting agents, delegate their first tasks immediately.** Don't just recruit and stop — use the `delegate` action to assign initial work to each newly recruited agent so they start working right away
 - Consider the project context when choosing models -- don't over-allocate opus for simple tasks
 - When in doubt about model choice, default to sonnet
 - Include relevant domain knowledge in each agent's system prompt

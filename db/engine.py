@@ -1,0 +1,72 @@
+"""Database engine factory and initialization.
+
+The only environment-based configuration: ``DATABASE_URL``.
+Everything else is stored in the ``config_entries`` table.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+
+from sqlalchemy.ext.asyncio import (
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+
+logger = logging.getLogger(__name__)
+
+DATABASE_URL = os.environ.get(
+    "DATABASE_URL",
+    "sqlite+aiosqlite:///./polyagentic.db",
+)
+
+_engine = None
+_session_factory: async_sessionmaker[AsyncSession] | None = None
+
+
+async def init_db(url: str | None = None) -> None:
+    """Create engine, create tables if they don't exist, seed defaults.
+
+    In production, Alembic migrations should be used instead of
+    ``create_all``.
+    """
+    global _engine, _session_factory
+
+    effective_url = url or DATABASE_URL
+    logger.info("Initializing database: %s", effective_url.split("@")[-1])
+
+    connect_args = {}
+    if effective_url.startswith("sqlite"):
+        connect_args["check_same_thread"] = False
+
+    _engine = create_async_engine(
+        effective_url,
+        echo=False,
+        connect_args=connect_args,
+    )
+    _session_factory = async_sessionmaker(
+        _engine, class_=AsyncSession, expire_on_commit=False,
+    )
+
+    # Create all tables (dev mode — production uses Alembic)
+    from db.models import Base  # noqa: F811 — triggers all model imports
+    async with _engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    logger.info("Database tables created/verified")
+
+
+def get_session_factory() -> async_sessionmaker[AsyncSession]:
+    """Return the async session factory.  Must call ``init_db`` first."""
+    if _session_factory is None:
+        raise RuntimeError("Database not initialized — call init_db() first")
+    return _session_factory
+
+
+def get_engine():
+    """Return the async engine.  Must call ``init_db`` first."""
+    if _engine is None:
+        raise RuntimeError("Database not initialized — call init_db() first")
+    return _engine

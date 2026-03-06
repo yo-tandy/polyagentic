@@ -4,7 +4,6 @@ import logging
 from pathlib import Path
 
 from core.agent import Agent
-from core.message import Message, MessageType
 from core.prompt_loader import load_prompt
 from config import CLAUDE_ALLOWED_TOOLS_READONLY
 
@@ -14,9 +13,9 @@ logger = logging.getLogger(__name__)
 class PerryAgent(Agent):
     """Product Manager agent — builds specs through user conversations.
 
-    Session-based (stateful). Conversation mode (start_conversation/end_conversation)
-    will be implemented in Phase 3. For now, uses respond_to_user with
-    suggested_answers for interactive spec building.
+    Session-based (stateful). All action handling (respond_to_user,
+    delegate, write_document, start_conversation, etc.) is done
+    centrally via the ActionRegistry.
     """
 
     def __init__(self, model: str, messages_dir: Path, working_dir: Path):
@@ -33,85 +32,10 @@ class PerryAgent(Agent):
             working_dir=working_dir,
             use_session=True,
         )
+        self._register_prompt_files("perry")
 
     def update_team_roster(self, roster_text: str, team_roles: str = "", routing_guide: str = ""):
         """Re-render system prompt with updated team roster."""
         self.system_prompt = self._render_prompt_template(
             self._prompt_template, roster_text, team_roles=team_roles, routing_guide=routing_guide,
         )
-
-    async def _parse_response(self, result_text: str, original_msg: Message) -> list[Message]:
-        messages = []
-        actions = self._extract_actions(result_text)
-
-        # Handle common actions (memory, KB, update_task)
-        await self._handle_common_actions(actions)
-
-        if not actions:
-            messages.append(Message(
-                sender=self.agent_id,
-                recipient=original_msg.sender,
-                type=MessageType.RESPONSE,
-                content=result_text,
-                task_id=original_msg.task_id,
-                parent_message_id=original_msg.id,
-            ))
-            return messages
-
-        for action in actions:
-            action_type = action.get("action")
-
-            if action_type == "delegate":
-                to = action.get("to", "")
-                title = action.get("task_title", "Task")
-                desc = action.get("task_description", "")
-                labels = action.get("labels", [])
-
-                if self._task_board:
-                    task = self._task_board.create_task(
-                        title=title, description=desc,
-                        created_by=self.agent_id, assignee=to,
-                        labels=labels,
-                    )
-                    task_id = task.id
-                else:
-                    task_id = None
-
-                messages.append(Message(
-                    sender=self.agent_id,
-                    recipient=to,
-                    type=MessageType.TASK,
-                    content=desc,
-                    task_id=task_id,
-                    parent_message_id=original_msg.id,
-                    metadata={"task_title": title},
-                ))
-
-            elif action_type == "respond_to_user":
-                suggested = action.get("suggested_answers", [])
-                meta = {}
-                if suggested:
-                    meta["suggested_answers"] = suggested[:3]
-                messages.append(Message(
-                    sender=self.agent_id,
-                    recipient="user",
-                    type=MessageType.CHAT,
-                    content=action.get("message", result_text),
-                    task_id=original_msg.task_id,
-                    parent_message_id=original_msg.id,
-                    metadata=meta if meta else None,
-                ))
-
-            # update_task, update_memory, write_document handled by _handle_common_actions
-
-        if not messages:
-            messages.append(Message(
-                sender=self.agent_id,
-                recipient=original_msg.sender,
-                type=MessageType.RESPONSE,
-                content=result_text,
-                task_id=original_msg.task_id,
-                parent_message_id=original_msg.id,
-            ))
-
-        return messages

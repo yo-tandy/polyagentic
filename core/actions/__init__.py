@@ -85,11 +85,7 @@ def create_default_registry() -> ActionRegistry:
 
     for action in actions:
         registry.register(action)
-        logger.debug(
-            "Registered action '%s' (allowed: %s)",
-            action.name,
-            action.allowed_agents or "all",
-        )
+        logger.debug("Registered action '%s'", action.name)
 
     logger.info(
         "Action registry loaded: %d actions discovered", len(actions),

@@ -18,7 +18,6 @@ class EndConversation(BaseAction):
 
     name = "end_conversation"
     description = "End an active conversation with the user."
-    allowed_agents = None  # all agents
     produces_messages = False
 
     fields = [
@@ -54,7 +53,7 @@ class EndConversation(BaseAction):
 
         # Send summary to the user-facing agent
         if summary and agent._broker:
-            ufa = getattr(agent, "_user_facing_agent", "manny")
+            ufa = agent._user_facing_agent
             summary_msg = Message(
                 sender=agent.agent_id,
                 recipient=ufa,

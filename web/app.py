@@ -33,6 +33,7 @@ def create_app(
         app.state.action_registry = app_state.get("action_registry")
         app.state.config_provider = app_state.get("config_provider")
         app.state.team_structure_repo = app_state.get("team_structure_repo")
+        app.state.role_repo = app_state.get("role_repo")
         app.state.project_store = project_store
         app.state.lifecycle_manager = lifecycle_manager
         yield

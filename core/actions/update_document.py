@@ -15,7 +15,6 @@ class UpdateDocument(BaseAction):
 
     name = "update_document"
     description = "Update an existing document in the knowledge base."
-    allowed_agents = None  # all agents
     produces_messages = False
 
     fields = [

@@ -15,8 +15,6 @@ class StartTask(BaseAction):
 
     name = "start_task"
     description = "Start or resume a paused task."
-    allowed_agents = {"manny", "dev_manager"}
-
     fields = [
         ActionField("agent_id", "string", required=True,
                      description="Agent to assign"),

@@ -15,8 +15,6 @@ class PauseTask(BaseAction):
 
     name = "pause_task"
     description = "Pause an agent's in-progress task."
-    allowed_agents = {"manny", "dev_manager"}
-
     fields = [
         ActionField("agent_id", "string", required=True,
                      description="Agent to pause"),

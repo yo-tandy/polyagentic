@@ -31,15 +31,28 @@ class ActionRegistry:
     def get(self, name: str) -> BaseAction | None:
         return self._actions.get(name)
 
-    def get_allowed_actions(self, agent_id: str) -> list[BaseAction]:
-        """Return all actions the given agent is permitted to use."""
+    def get_all_action_names(self) -> set[str]:
+        """Return the names of every registered action."""
+        return set(self._actions.keys())
+
+    def get_actions_for_agent(self, agent: Agent) -> list[BaseAction]:
+        """Return actions the given agent is permitted to use.
+
+        Permission is determined by the agent's ``_allowed_actions`` set.
+        If the set is ``None``, the agent can use every registered action.
+        """
+        if agent._allowed_actions is None:
+            return list(self._actions.values())
         return [
             a for a in self._actions.values()
-            if a.is_allowed(agent_id)
+            if a.name in agent._allowed_actions
         ]
 
-    def get_allowed_action_names(self, agent_id: str) -> set[str]:
-        return {a.name for a in self.get_allowed_actions(agent_id)}
+    def get_action_names_for_agent(self, agent: Agent) -> set[str]:
+        """Return names of actions the agent is permitted to use."""
+        if agent._allowed_actions is None:
+            return self.get_all_action_names()
+        return agent._allowed_actions & self.get_all_action_names()
 
     # ── Execution ─────────────────────────────────────────────────────
 
@@ -66,14 +79,13 @@ class ActionRegistry:
             )
             return []
 
-        # ── Permission check ──────────────────────────────────────────
-        if not action.is_allowed(agent.agent_id):
+        # ── Permission check (agent-side) ────────────────────────────
+        if (agent._allowed_actions is not None
+                and action_name not in agent._allowed_actions):
             logger.warning(
-                "PERMISSION DENIED: agent '%s' cannot use action '%s' "
-                "(allowed: %s)",
+                "PERMISSION DENIED: agent '%s' cannot use action '%s'",
                 agent.agent_id,
                 action_name,
-                action.allowed_agents,
             )
             return []
 
@@ -144,9 +156,9 @@ class ActionRegistry:
 
     # ── Prompt generation ─────────────────────────────────────────────
 
-    def generate_prompt_docs(self, agent_id: str) -> str:
+    def generate_prompt_docs(self, agent: Agent) -> str:
         """Generate the complete action documentation section for an agent."""
-        allowed = self.get_allowed_actions(agent_id)
+        allowed = self.get_actions_for_agent(agent)
         if not allowed:
             return ""
 

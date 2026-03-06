@@ -15,8 +15,6 @@ class AssignTicket(BaseAction):
 
     name = "assign_ticket"
     description = "Create and assign a task ticket."
-    allowed_agents = {"jerry"}
-
     fields = [
         ActionField("to", "string", required=True,
                      description="Assignee agent ID"),

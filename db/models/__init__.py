@@ -12,3 +12,4 @@ from db.models.conversation import Conversation, ConversationMessage  # noqa: F4
 from db.models.message import MessageLog  # noqa: F401
 from db.models.config import ConfigEntry  # noqa: F401
 from db.models.team_structure import TeamAgentDef, TeamStructureMeta  # noqa: F401
+from db.models.role import AgentRole  # noqa: F401

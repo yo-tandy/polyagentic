@@ -18,7 +18,6 @@ class WriteDocument(BaseAction):
 
     name = "write_document"
     description = "Write a new document to the knowledge base."
-    allowed_agents = None  # all agents
     produces_messages = False
 
     fields = [

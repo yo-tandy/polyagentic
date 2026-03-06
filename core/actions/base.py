@@ -73,14 +73,9 @@ class BaseAction:
     Subclasses must set the class-level attributes and implement
     :meth:`execute`.
 
-    Permissions
-    -----------
-    ``allowed_agents`` controls which agents may use this action:
-
-    - ``None``  → **all** agents can use it (universal action)
-    - ``{"jerry", "manny"}`` → only those agents can use it
-
-    The registry calls :meth:`is_allowed` before every execution.
+    Permissions are controlled on the **agent/role** side, not here.
+    Each role defines its ``allowed_actions`` list; the
+    :class:`ActionRegistry` enforces this before every execution call.
     """
 
     # ── Must be set by subclasses ──────────────────────────────────────
@@ -93,15 +88,6 @@ class BaseAction:
 
     produces_messages: bool = True
     example: dict | None = None
-    allowed_agents: set[str] | None = None  # None = all agents
-
-    # ── Permission check ──────────────────────────────────────────────
-
-    def is_allowed(self, agent_id: str) -> bool:
-        """Return True if *agent_id* has permission to use this action."""
-        if self.allowed_agents is None:
-            return True
-        return agent_id in self.allowed_agents
 
     # ── Execution ─────────────────────────────────────────────────────
 

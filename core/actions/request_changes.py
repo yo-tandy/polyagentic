@@ -18,7 +18,6 @@ class RequestChanges(BaseAction):
 
     name = "request_changes"
     description = "Request changes on a pull request."
-    allowed_agents = {"innes"}
 
     fields = [
         ActionField("pr_number", "integer", required=True,

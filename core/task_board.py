@@ -17,7 +17,7 @@ PRIVILEGED_AGENTS = {"user", "manny", "jerry"}
 
 VALID_TRANSITIONS = {
     TaskStatus.PENDING:     {TaskStatus.IN_PROGRESS, TaskStatus.BLOCKED, TaskStatus.PAUSED},
-    TaskStatus.IN_PROGRESS: {TaskStatus.REVIEW, TaskStatus.BLOCKED, TaskStatus.PAUSED, TaskStatus.PENDING},
+    TaskStatus.IN_PROGRESS: {TaskStatus.REVIEW, TaskStatus.DONE, TaskStatus.BLOCKED, TaskStatus.PAUSED, TaskStatus.PENDING},
     TaskStatus.REVIEW:      {TaskStatus.DONE, TaskStatus.IN_PROGRESS, TaskStatus.PENDING},
     TaskStatus.BLOCKED:     {TaskStatus.PENDING, TaskStatus.IN_PROGRESS},
     TaskStatus.PAUSED:      {TaskStatus.IN_PROGRESS, TaskStatus.PENDING},

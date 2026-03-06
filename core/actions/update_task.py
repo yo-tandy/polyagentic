@@ -15,7 +15,6 @@ class UpdateTask(BaseAction):
 
     name = "update_task"
     description = "Update an existing task on the board."
-    allowed_agents = None  # all agents
     produces_messages = False
 
     fields = [

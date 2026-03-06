@@ -18,7 +18,6 @@ class ResolveComments(BaseAction):
 
     name = "resolve_comments"
     description = "Mark document comments as resolved."
-    allowed_agents = None  # all agents
     produces_messages = False
 
     fields = [

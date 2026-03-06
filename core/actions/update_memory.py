@@ -18,7 +18,6 @@ class UpdateMemory(BaseAction):
 
     name = "update_memory"
     description = "Save notes to your persistent memory."
-    allowed_agents = None  # all agents
     produces_messages = False
 
     fields = [

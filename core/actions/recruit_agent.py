@@ -18,7 +18,6 @@ class RecruitAgent(BaseAction):
 
     name = "recruit_agent"
     description = "Recruit (create) a new team member agent."
-    allowed_agents = {"rory"}
 
     fields = [
         ActionField("name", "string", required=True,
@@ -38,7 +37,7 @@ class RecruitAgent(BaseAction):
         self, agent: Agent, action: dict, original_msg: Message,
         ctx: ActionContext,
     ) -> list[Message]:
-        registry = getattr(agent, "_registry", None)
+        registry = agent.deps.get("registry")
         if not registry:
             logger.warning(
                 "Agent %s tried recruit/create agent but has no registry",
@@ -71,17 +70,17 @@ class RecruitAgent(BaseAction):
                                          CLAUDE_ALLOWED_TOOLS_DEV),
                 registry=registry,
                 broker=agent._broker,
-                session_store=getattr(agent, "_extra_session_store", None),
+                session_store=agent.deps.get("session_store"),
                 task_board=agent._task_board,
-                git_manager=getattr(agent, "_git_manager", None),
-                workspace_path=getattr(agent, "_workspace_path", None),
-                messages_dir=getattr(agent, "_messages_dir", None),
-                worktrees_dir=getattr(agent, "_worktrees_dir", None),
+                git_manager=agent.deps.get("git_manager"),
+                workspace_path=agent.deps.get("workspace_path"),
+                messages_dir=agent.deps.get("messages_dir"),
+                worktrees_dir=agent.deps.get("worktrees_dir"),
                 memory_manager=agent._memory_manager,
                 knowledge_base=agent._knowledge_base,
-                container_manager=getattr(agent, "_container_manager", None),
-                project_store=getattr(agent, "_project_store", None),
-                team_structure=getattr(agent, "_team_structure", None),
+                container_manager=agent.deps.get("container_manager"),
+                project_store=agent.deps.get("project_store"),
+                team_structure=agent.deps.get("team_structure"),
                 action_registry=agent._action_registry,
             )
             logger.info(

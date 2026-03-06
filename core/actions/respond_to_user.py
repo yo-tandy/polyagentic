@@ -15,8 +15,6 @@ class RespondToUser(BaseAction):
 
     name = "respond_to_user"
     description = "Send a message to the user."
-    allowed_agents = None  # all agents
-
     fields = [
         ActionField("message", "string", required=True,
                      description="The message content"),

@@ -18,7 +18,6 @@ class StartConversation(BaseAction):
 
     name = "start_conversation"
     description = "Start an interactive conversation with the user."
-    allowed_agents = None  # all agents
     produces_messages = False
 
     fields = [

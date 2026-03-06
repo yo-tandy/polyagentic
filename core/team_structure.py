@@ -2,11 +2,13 @@
 
 Reads team_structure.yaml (global default) and optionally merges a
 project-level override from projects/<project_id>/team_structure.yaml.
+
+Agent instances are created from role definitions via the generic factory
+in :mod:`agents.role_agent`.
 """
 
 from __future__ import annotations
 
-import importlib
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -21,17 +23,21 @@ logger = logging.getLogger(__name__)
 @dataclass
 class AgentDefinition:
     agent_id: str
-    class_name: str
-    module_path: str
     name: str
-    role: str
+    role: str               # display role label (e.g. "Manager")
     description: str
+    role_id: str = ""       # references agent_roles.role_id (e.g. "manager")
     model: str = "sonnet"
     is_fixed: bool = False
     needs_worktree: bool = True
-    configure_extras: list[str] = field(default_factory=list)
     routing_rules: list[dict] = field(default_factory=list)
     enabled: bool = True
+    prompt_append: str = ""                  # project-specific prompt addition
+    allowed_actions: list[str] | None = None  # override role defaults (None = use role)
+    # Legacy fields — kept for backward compat during migration
+    class_name: str = ""
+    module_path: str = ""
+    configure_extras: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -127,17 +133,21 @@ def _parse_structure(data: dict) -> TeamStructure:
             continue
         agents[agent_id] = AgentDefinition(
             agent_id=agent_id,
-            class_name=agent_data.get("class", "CustomAgent"),
-            module_path=agent_data.get("module", "agents.custom_agent"),
             name=agent_data.get("name", agent_id.replace("_", " ").title()),
             role=agent_data.get("role", agent_id),
             description=agent_data.get("description", ""),
+            role_id=agent_data.get("role_id", ""),
             model=agent_data.get("model", "sonnet"),
             is_fixed=agent_data.get("is_fixed", False),
             needs_worktree=agent_data.get("needs_worktree", True),
-            configure_extras=agent_data.get("configure_extras", []) or [],
             routing_rules=agent_data.get("routing_rules", []) or [],
             enabled=agent_data.get("enabled", True),
+            prompt_append=agent_data.get("prompt_append", ""),
+            allowed_actions=agent_data.get("allowed_actions"),
+            # Legacy
+            class_name=agent_data.get("class", ""),
+            module_path=agent_data.get("module", ""),
+            configure_extras=agent_data.get("configure_extras", []) or [],
         )
 
     return TeamStructure(
@@ -177,16 +187,3 @@ def build_routing_guide(structure: TeamStructure) -> str:
     for rule in router.routing_rules:
         lines.append(f"| {rule.get('request', '')} | {rule.get('route_to', '')} |")
     return "\n".join(lines)
-
-
-# ── Agent instantiation helper ───────────────────────────────────────
-
-def instantiate_agent(agent_def: AgentDefinition, messages_dir: Path, working_dir: Path):
-    """Dynamically import and instantiate an agent class from its definition."""
-    module = importlib.import_module(agent_def.module_path)
-    cls = getattr(module, agent_def.class_name)
-    return cls(
-        model=agent_def.model,
-        messages_dir=messages_dir,
-        working_dir=working_dir,
-    )

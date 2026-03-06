@@ -18,7 +18,6 @@ class CreateRepo(BaseAction):
 
     name = "create_repo"
     description = "Create a GitHub repository."
-    allowed_agents = {"innes"}
 
     fields = [
         ActionField("name", "string", required=True,
@@ -33,7 +32,7 @@ class CreateRepo(BaseAction):
         self, agent: Agent, action: dict, original_msg: Message,
         ctx: ActionContext,
     ) -> list[Message]:
-        git_manager = getattr(agent, "_git_manager", None)
+        git_manager = agent.deps.get("git_manager")
         if not git_manager:
             return [Message(
                 sender=agent.agent_id,
@@ -53,7 +52,7 @@ class CreateRepo(BaseAction):
             result = await git_manager.create_github_repo(
                 name=repo_name, description=description, private=private,
             )
-            project_store = getattr(agent, "_project_store", None)
+            project_store = agent.deps.get("project_store")
             if project_store:
                 active_id = project_store.get_active_project_id()
                 if active_id:

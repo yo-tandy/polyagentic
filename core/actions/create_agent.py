@@ -8,4 +8,3 @@ class CreateAgent(RecruitAgent):
 
     name = "create_agent"
     description = "Create a new team member agent."
-    allowed_agents = {"dev_manager"}

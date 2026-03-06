@@ -18,8 +18,6 @@ class MergePr(BaseAction):
 
     name = "merge_pr"
     description = "Merge a pull request."
-    allowed_agents = {"innes"}
-
     fields = [
         ActionField("pr_number", "integer", required=True,
                      description="PR number"),
@@ -33,7 +31,7 @@ class MergePr(BaseAction):
         self, agent: Agent, action: dict, original_msg: Message,
         ctx: ActionContext,
     ) -> list[Message]:
-        git_manager = getattr(agent, "_git_manager", None)
+        git_manager = agent.deps.get("git_manager")
         pr_number = action.get("pr_number")
         method = action.get("method", "squash")
         if not pr_number or not git_manager:

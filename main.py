@@ -31,9 +31,10 @@ from core.conversation_manager import ConversationManager
 from core.memory_manager import MemoryManager
 from core.knowledge_base import KnowledgeBase
 from core.team_structure import (
-    load_team_structure, instantiate_agent,
+    load_team_structure,
     build_fixed_team_roles, build_routing_guide,
 )
+from agents.role_agent import create_role_agent
 from agents.custom_agent import create_custom_agent
 from core.message import Message, MessageType
 from web.app import create_app
@@ -50,6 +51,7 @@ from db.repositories.memory_repo import MemoryRepository
 from db.repositories.conversation_repo import ConversationRepository
 from db.repositories.message_repo import MessageRepository
 from db.repositories.team_structure_repo import TeamStructureRepository
+from db.repositories.role_repo import RoleRepository
 
 logging.basicConfig(
     level=logging.INFO,
@@ -215,7 +217,12 @@ class ProjectLifecycleManager:
         # ── Load team structure (global + per-project override) ──
         team_structure = load_team_structure(BASE_DIR, project_dir)
 
-        # Dependency map for configure_extras
+        # ── Load roles from DB ──
+        role_repo = RoleRepository(self._sf)
+        await role_repo.seed_defaults_if_empty()
+        roles = await role_repo.get_all_as_dict()
+
+        # Dependency map for agent deps injection
         extras_map = {
             "registry": registry,
             "git_manager": git_manager,
@@ -235,26 +242,69 @@ class ProjectLifecycleManager:
         default_model = self._config.get("DEFAULT_MODEL", DEFAULT_MODEL)
         allowed_tools_dev = self._config.get("CLAUDE_ALLOWED_TOOLS_DEV", CLAUDE_ALLOWED_TOOLS_DEV)
 
-        # ── Create agents from team structure (data-driven) ──
+        # ── Create agents from team structure + roles (data-driven) ──
         for agent_id, agent_def in team_structure.get_enabled_agents().items():
             tc_model = tc_fixed.get(agent_id, {}).get("model")
-            if tc_model:
-                agent_def.model = tc_model
+            model = tc_model or agent_def.model
 
-            agent = instantiate_agent(agent_def, messages_dir, workspace_path)
+            role_def = roles.get(agent_def.role_id)
+            if role_def:
+                # Role-based instantiation (new path)
+                agent = create_role_agent(
+                    agent_id=agent_id,
+                    name=agent_def.name,
+                    role_def=role_def,
+                    messages_dir=messages_dir,
+                    working_dir=workspace_path,
+                    model=model,
+                    prompt_append=agent_def.prompt_append or "",
+                    allowed_actions_override=agent_def.allowed_actions,
+                    description=agent_def.description,
+                )
+                # Inject deps from role definition
+                for dep_name in role_def.deps:
+                    if dep_name in extras_map:
+                        agent.deps[dep_name] = extras_map[dep_name]
+            else:
+                # Legacy fallback: no role_id set, try old-style class import
+                logger.warning(
+                    "Agent '%s' has no role_id, falling back to legacy instantiation",
+                    agent_id,
+                )
+                import importlib
+                module = importlib.import_module(agent_def.module_path)
+                cls = getattr(module, agent_def.class_name)
+                agent = cls(model=model, messages_dir=messages_dir, working_dir=workspace_path)
+                # Legacy configure_extras
+                if agent_def.configure_extras and hasattr(agent, "configure_extras"):
+                    kwargs = {k: extras_map[k] for k in agent_def.configure_extras if k in extras_map}
+                    agent.configure_extras(**kwargs)
+
             registry.register(agent)
 
         # Custom agents from project-scoped storage
-        for agent_def in await ps.get_custom_agents(project_id):
-            agent = create_custom_agent(
-                name=agent_def["name"],
-                role=agent_def.get("role", agent_def["name"]),
-                system_prompt=agent_def.get("system_prompt", f"You are a {agent_def.get('role', 'developer')}."),
-                model=agent_def.get("model", default_model),
-                allowed_tools=agent_def.get("allowed_tools", allowed_tools_dev),
-                messages_dir=messages_dir,
-                working_dir=workspace_path,
-            )
+        for agent_def_dict in await ps.get_custom_agents(project_id):
+            engineer_role = roles.get("engineer")
+            if engineer_role:
+                agent = create_role_agent(
+                    agent_id=agent_def_dict["name"],
+                    name=agent_def_dict["name"].replace("_", " ").title(),
+                    role_def=engineer_role,
+                    messages_dir=messages_dir,
+                    working_dir=workspace_path,
+                    model=agent_def_dict.get("model", default_model),
+                    prompt_append=agent_def_dict.get("system_prompt", ""),
+                )
+            else:
+                agent = create_custom_agent(
+                    name=agent_def_dict["name"],
+                    role=agent_def_dict.get("role", agent_def_dict["name"]),
+                    system_prompt=agent_def_dict.get("system_prompt", f"You are a {agent_def_dict.get('role', 'developer')}."),
+                    model=agent_def_dict.get("model", default_model),
+                    allowed_tools=agent_def_dict.get("allowed_tools", allowed_tools_dev),
+                    messages_dir=messages_dir,
+                    working_dir=workspace_path,
+                )
             registry.register(agent)
 
         # Configure all agents
@@ -282,17 +332,7 @@ class ProjectLifecycleManager:
         team_roles = build_fixed_team_roles(team_structure)
         routing_guide = build_routing_guide(team_structure)
         for agent in registry.get_all():
-            if hasattr(agent, "update_team_roster"):
-                agent.update_team_roster(roster, team_roles=team_roles, routing_guide=routing_guide)
-
-        # ── configure_extras (data-driven from team structure) ──
-        for agent_id, agent_def in team_structure.get_enabled_agents().items():
-            if not agent_def.configure_extras:
-                continue
-            agent = registry.get(agent_id)
-            if agent and hasattr(agent, "configure_extras"):
-                kwargs = {k: extras_map[k] for k in agent_def.configure_extras if k in extras_map}
-                agent.configure_extras(**kwargs)
+            agent.update_team_roster(roster, team_roles=team_roles, routing_guide=routing_guide)
 
         # ── Create worktrees for agents that need them ──
         no_worktree_ids = team_structure.get_worktree_excluded_ids()
@@ -365,6 +405,7 @@ class ProjectLifecycleManager:
             "action_registry": action_registry,
             "project_id": project_id,
             "config_provider": self._config,
+            "role_repo": role_repo,
         }
 
 

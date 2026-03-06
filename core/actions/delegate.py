@@ -15,8 +15,6 @@ class Delegate(BaseAction):
 
     name = "delegate"
     description = "Delegate a task to another team member."
-    allowed_agents = None  # all agents
-
     fields = [
         ActionField("to", "string", required=True,
                      description="Target agent ID"),
@@ -52,7 +50,7 @@ class Delegate(BaseAction):
         role = action.get("role", None)
 
         # Smart routing: agents with _registry check if target exists
-        registry = getattr(agent, "_registry", None)
+        registry = agent.deps.get("registry")
         if registry:
             is_known_agent = bool(registry.get(to))
         else:

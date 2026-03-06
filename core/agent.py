@@ -7,10 +7,9 @@ import logging
 import re
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 from core.message import Message, MessageType
-from core.prompt_loader import load_prompt_with_paths
 from core.subprocess_manager import SubprocessManager, DockerSubprocessManager
 from core.session_store import SessionStore
 from config import DEFAULT_MODEL, CLAUDE_ALLOWED_TOOLS_DEV
@@ -65,6 +64,8 @@ class Agent:
         max_budget_usd: float | None = None,
         execution_mode: str = "local",
         container_name: str | None = None,
+        stateless: bool = False,
+        allowed_actions: set[str] | None = None,
     ):
         self.agent_id = agent_id
         self.name = name
@@ -79,6 +80,17 @@ class Agent:
         self.max_budget_usd = max_budget_usd
         self.execution_mode = execution_mode
         self.container_name = container_name
+
+        # Role-driven attributes
+        self._stateless: bool = stateless
+        self._allowed_actions: set[str] | None = allowed_actions  # None = all
+        self.deps: dict[str, Any] = {}  # generic dependency store
+
+        # Prompt template + team roster (used by update_team_roster)
+        self._prompt_template: str = system_prompt
+        self._team_roster: str = ""
+        self._team_roles: str = ""
+        self._routing_guide: str = ""
 
         self.status = AgentStatus.OFFLINE
         self.current_task_id: str | None = None
@@ -100,11 +112,6 @@ class Agent:
         self._user_facing_agent: str = "manny"
         self._loop_task: asyncio.Task | None = None
         self._running = False
-
-        # Prompt hot-reload: track file modification times
-        self._prompt_name: str | None = None      # set by subclasses that want hot-reload
-        self._prompt_file_paths: list[Path] = []   # files in the inheritance chain
-        self._prompt_file_mtimes: dict[str, float] = {}  # path → last known mtime
 
     @property
     def inbox_dir(self) -> Path:
@@ -282,17 +289,24 @@ class Agent:
                                 if r.content:
                                     summary = r.content[:500]
                                     break
-                            await self._task_board.update_task(
+                            result = await self._task_board.update_task(
                                 msg.task_id,
                                 status=TaskStatus.DONE,
                                 _agent_id=self.agent_id,
                                 completion_summary=summary or "Task completed",
                             )
-                            logger.info(
-                                "Auto-closed task %s for agent %s "
-                                "(agent did not emit update_task)",
-                                msg.task_id, self.agent_id,
-                            )
+                            if result:
+                                logger.info(
+                                    "Auto-closed task %s for agent %s "
+                                    "(agent did not emit update_task)",
+                                    msg.task_id, self.agent_id,
+                                )
+                            else:
+                                logger.warning(
+                                    "Auto-close REJECTED for task %s by agent %s "
+                                    "(invalid transition)",
+                                    msg.task_id, self.agent_id,
+                                )
 
                 # Memory enforcement: remind agent to update memory after task completion
                 if msg.task_id and self._task_board:
@@ -508,11 +522,13 @@ class Agent:
     def _get_known_actions(self) -> set[str]:
         """Return the set of valid action names for this agent.
 
-        Delegates to the action registry when available; falls back to
-        the class-level ``KNOWN_ACTIONS`` for backward compatibility.
+        Uses agent-side permissions (``_allowed_actions``) when set;
+        falls back to the action registry or class-level ``KNOWN_ACTIONS``.
         """
+        if self._allowed_actions is not None:
+            return self._allowed_actions
         if self._action_registry:
-            return self._action_registry.get_allowed_action_names(self.agent_id)
+            return self._action_registry.get_all_action_names()
         return self.KNOWN_ACTIONS
 
     def _get_session_reminder(self) -> str:
@@ -532,6 +548,17 @@ class Agent:
         )
 
     async def _get_system_prompt_if_first_call(self) -> str | None:
+        if self._stateless:
+            # Stateless agent — always re-render and send full system prompt
+            self.system_prompt = self._render_prompt_template(
+                self._prompt_template,
+                self._team_roster or "",
+                team_roles=self._team_roles or "",
+                routing_guide=self._routing_guide or "",
+            )
+            prompt = await self._build_full_system_prompt()
+            return prompt
+
         prompt = await self._build_full_system_prompt()
         if self.use_session and self._session_store and self._session_store.get(self.agent_id):
             # Check if system prompt has changed since session was created
@@ -550,60 +577,22 @@ class Agent:
             await self._session_store.invalidate_session(self.agent_id)
         return prompt
 
-    def _register_prompt_files(self, prompt_name: str):
-        """Register prompt files for hot-reload monitoring."""
-        self._prompt_name = prompt_name
-        try:
-            _, paths = load_prompt_with_paths(prompt_name)
-            self._prompt_file_paths = paths
-            self._prompt_file_mtimes = {
-                str(p): p.stat().st_mtime for p in paths if p.exists()
-            }
-        except Exception as e:
-            logger.warning("Could not register prompt files for %s: %s", self.agent_id, e)
+    def update_team_roster(self, roster_text: str, team_roles: str = "", routing_guide: str = ""):
+        """Re-render system prompt with updated team roster.
 
-    def _check_prompt_hot_reload(self):
-        """Reload prompt template from disk if any file in the chain changed."""
-        if not self._prompt_name or not self._prompt_file_paths:
-            return
-        # Check if any file has been modified
-        changed = False
-        for p in self._prompt_file_paths:
-            try:
-                current_mtime = p.stat().st_mtime
-            except OSError:
-                continue
-            stored = self._prompt_file_mtimes.get(str(p))
-            if stored is None or current_mtime > stored:
-                changed = True
-                break
-        if not changed:
-            return
-        # Reload the full prompt chain from disk
-        try:
-            new_template, new_paths = load_prompt_with_paths(self._prompt_name)
-        except Exception as e:
-            logger.warning("Hot-reload failed for %s: %s", self.agent_id, e)
-            return
-        self._prompt_template = new_template
-        self._prompt_file_paths = new_paths
-        self._prompt_file_mtimes = {
-            str(p): p.stat().st_mtime for p in new_paths if p.exists()
-        }
-        # Re-render system prompt with current roster/roles
-        if hasattr(self, "update_team_roster") and hasattr(self, "_team_roster"):
-            self.update_team_roster(
-                getattr(self, "_team_roster", ""),
-                team_roles=getattr(self, "_team_roles", ""),
-                routing_guide=getattr(self, "_routing_guide", ""),
-            )
-        else:
-            self.system_prompt = new_template
-        logger.info("Agent %s prompt hot-reloaded from disk", self.agent_id)
+        This is the canonical implementation — subclasses no longer need
+        their own version.
+        """
+        self._team_roster = roster_text
+        self._team_roles = team_roles
+        self._routing_guide = routing_guide
+        self.system_prompt = self._render_prompt_template(
+            self._prompt_template, roster_text,
+            team_roles=team_roles, routing_guide=routing_guide,
+        )
 
     async def _build_full_system_prompt(self) -> str:
         """Build the complete system prompt including memory."""
-        self._check_prompt_hot_reload()
         prompt = self.system_prompt
         if self._memory_manager:
             memory = await self._memory_manager.get_combined_memory(self.agent_id)

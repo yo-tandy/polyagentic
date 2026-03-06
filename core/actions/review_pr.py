@@ -15,7 +15,6 @@ class ReviewPr(BaseAction):
 
     name = "review_pr"
     description = "Review a pull request."
-    allowed_agents = {"innes"}
 
     fields = [
         ActionField("pr_number", "integer", required=True,
@@ -30,7 +29,7 @@ class ReviewPr(BaseAction):
         self, agent: Agent, action: dict, original_msg: Message,
         ctx: ActionContext,
     ) -> list[Message]:
-        git_manager = getattr(agent, "_git_manager", None)
+        git_manager = agent.deps.get("git_manager")
         pr_number = action.get("pr_number")
         if not pr_number or not git_manager:
             return []

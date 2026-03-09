@@ -40,7 +40,7 @@ async def get_sessions(request: Request):
             "last_used_at": info.get("last_used_at"),
             "paused_at": info.get("paused_at"),
             "killed_at": info.get("killed_at"),
-            "last_error": agent.last_error,
+            "last_error": info.get("last_error") or agent.last_error,
         })
 
     return {"sessions": result}

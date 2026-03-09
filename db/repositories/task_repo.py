@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import select, delete
+from sqlalchemy.orm import selectinload
 
 from db.models.task import TaskModel, TaskProgressNote
 from db.repositories.base import BaseRepository
@@ -30,9 +31,12 @@ class TaskRepository(BaseRepository):
 
     async def get_all(self, project_id: str) -> list[TaskModel]:
         async with self._session() as session:
-            stmt = select(TaskModel).where(
-                TaskModel.project_id == project_id,
-            ).order_by(TaskModel.priority, TaskModel.created_at)
+            stmt = (
+                select(TaskModel)
+                .options(selectinload(TaskModel.progress_notes))
+                .where(TaskModel.project_id == project_id)
+                .order_by(TaskModel.priority, TaskModel.created_at)
+            )
             result = await session.execute(stmt)
             return list(result.scalars().all())
 

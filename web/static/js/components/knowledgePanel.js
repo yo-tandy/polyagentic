@@ -1,7 +1,7 @@
 const KnowledgePanel = {
     container: null,
     documents: [],
-    categories: ['specs', 'design', 'architecture', 'planning', 'history', 'repo'],
+    categories: ['specs', 'design', 'architecture', 'planning', 'history', 'repo', 'uploaded'],
     _selectedDocId: null,
     _comments: [],
     _commentingMode: false,
@@ -46,7 +46,9 @@ const KnowledgePanel = {
                 <div class="kb-category__title">${cat}</div>
                 ${docs.map(d => `
                     <div class="kb-doc" data-doc-id="${d.id}">
-                        <div class="kb-doc__title">${this._escapeHtml(d.title)}</div>
+                        <div class="kb-doc__title">
+                            ${d.file_type ? `<span class="kb-doc__type">${d.file_type.toUpperCase()}</span> ` : ''}${this._escapeHtml(d.title)}
+                        </div>
                         <div class="kb-doc__meta">
                             <span class="kb-doc__author">${d.created_by || 'unknown'}</span>
                             <span class="kb-doc__time">${this._timeAgo(d.updated_at || d.created_at)}</span>
@@ -181,12 +183,14 @@ const KnowledgePanel = {
                     <button class="kb-comment-toggle" id="kb-comment-toggle" title="Toggle commenting mode">
                         Comment${commentCountBadge}
                     </button>
+                    <button class="btn btn--sm btn--danger" id="kb-delete-doc" title="Delete document">Delete</button>
                 </div>
                 <div class="kb-viewer__doc-meta">
                     <span class="kb-viewer__doc-category">${doc.category}</span>
                     <span>by ${this._escapeHtml(doc.created_by || 'unknown')}</span>
                     <span>Created ${this._formatTime(doc.created_at)}</span>
                     <span>Updated ${this._formatTime(doc.updated_at)}</span>
+                    ${doc.upload_path ? `<a href="/api/uploads/${doc.id}/download" class="kb-viewer__download" download>Download original</a>` : ''}
                 </div>
             </div>
             <div class="kb-viewer__doc-content kb-markdown">${renderedContent}</div>
@@ -195,6 +199,16 @@ const KnowledgePanel = {
         // Bind comment toggle
         document.getElementById('kb-comment-toggle')?.addEventListener('click', () => {
             this._toggleCommentingMode();
+        });
+
+        // Bind delete button
+        document.getElementById('kb-delete-doc')?.addEventListener('click', async () => {
+            if (!confirm('Delete this document? This cannot be undone.')) return;
+            const res = await fetch(`/api/knowledge/${docId}`, { method: 'DELETE' });
+            if (res.ok) {
+                this._closeViewer();
+                await this.load();
+            }
         });
 
         // Annotate existing comments

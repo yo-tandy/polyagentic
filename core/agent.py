@@ -112,6 +112,7 @@ class Agent:
         self._user_facing_agent: str = "manny"
         self._loop_task: asyncio.Task | None = None
         self._running = False
+        self._current_task_plan: str | None = None  # plan text for current task
 
     @property
     def inbox_dir(self) -> Path:
@@ -130,6 +131,7 @@ class Agent:
         knowledge_base: KnowledgeBase | None = None,
         conversation_manager=None,
         action_registry: ActionRegistry | None = None,
+        phase_board=None,
     ):
         self._session_store = session_store
         self._broker = broker
@@ -138,6 +140,7 @@ class Agent:
         self._knowledge_base = knowledge_base
         self._conversation_manager = conversation_manager
         self._action_registry = action_registry
+        self._phase_board = phase_board
 
     async def start(self):
         self.inbox_dir.mkdir(parents=True, exist_ok=True)
@@ -196,13 +199,17 @@ class Agent:
             # Auto-transition: mark task in_progress when agent starts working
             if msg.task_id and msg.type == MessageType.TASK and self._task_board:
                 task = self._task_board.get_task(msg.task_id)
-                if task and task.status in (TaskStatus.PENDING, TaskStatus.PAUSED):
+                if task and task.status in (TaskStatus.DRAFT, TaskStatus.PENDING, TaskStatus.PAUSED):
                     await self._task_board.update_task(
                         msg.task_id,
                         status=TaskStatus.IN_PROGRESS,
                         _agent_id=self.agent_id,
                         progress_note="Agent started working on this task",
                     )
+
+                    # Planning phase: ask agent to outline its approach before execution
+                    await self._run_planning_phase(task, msg)
+
                 self.current_task_id = msg.task_id
 
             try:
@@ -267,46 +274,64 @@ class Agent:
 
                 # Auto-close enforcement: if agent processed a TASK message
                 # but didn't explicitly update the task status, auto-close it.
+                # Delegation is NOT a reason to skip — delegated subtasks are
+                # tracked independently; the delegating agent's own task is done.
                 if (msg.type == MessageType.TASK and msg.task_id
                         and self._task_board):
                     task = self._task_board.get_task(msg.task_id)
                     if task and task.status == TaskStatus.IN_PROGRESS:
-                        # Don't auto-close if agent delegated to another agent
-                        has_delegation = any(
-                            r.type == MessageType.TASK
-                            and r.recipient != self.agent_id
-                            for r in responses
+                        # Check if the response is an error (timeout, auth, etc.)
+                        # If so, send the task back to PENDING for retry instead
+                        # of marking it DONE with an error as the "summary".
+                        is_error_response = any(
+                            r.content and r.content.startswith("⚠️") for r in responses
                         )
-                        # Don't auto-close if agent started a conversation
-                        has_conversation = bool(
-                            self._conversation_manager
-                            and self._conversation_manager.get_by_agent(self.agent_id)
-                        )
-                        if not has_delegation and not has_conversation:
-                            # Use agent's response as the completion summary
-                            summary = ""
-                            for r in responses:
-                                if r.content:
-                                    summary = r.content[:500]
-                                    break
-                            result = await self._task_board.update_task(
-                                msg.task_id,
-                                status=TaskStatus.DONE,
-                                _agent_id=self.agent_id,
-                                completion_summary=summary or "Task completed",
+                        if is_error_response:
+                            error_text = next(
+                                (r.content for r in responses if r.content and r.content.startswith("⚠️")), ""
                             )
-                            if result:
-                                logger.info(
-                                    "Auto-closed task %s for agent %s "
-                                    "(agent did not emit update_task)",
-                                    msg.task_id, self.agent_id,
+                            await self._task_board.update_task(
+                                msg.task_id,
+                                status=TaskStatus.PENDING,
+                                _agent_id=self.agent_id,
+                                progress_note=f"Returned to pending — {error_text}",
+                            )
+                            logger.warning(
+                                "Task %s returned to pending after agent %s error: %s",
+                                msg.task_id, self.agent_id, error_text[:200],
+                            )
+                        else:
+                            # Only skip auto-close if agent has an active conversation
+                            # (still waiting for user input to complete the task)
+                            has_conversation = bool(
+                                self._conversation_manager
+                                and self._conversation_manager.get_by_agent(self.agent_id)
+                            )
+                            if not has_conversation:
+                                # Use agent's response as the completion summary
+                                summary = ""
+                                for r in responses:
+                                    if r.content:
+                                        summary = r.content[:500]
+                                        break
+                                result = await self._task_board.update_task(
+                                    msg.task_id,
+                                    status=TaskStatus.DONE,
+                                    _agent_id=self.agent_id,
+                                    completion_summary=summary or "Task completed",
                                 )
-                            else:
-                                logger.warning(
-                                    "Auto-close REJECTED for task %s by agent %s "
-                                    "(invalid transition)",
-                                    msg.task_id, self.agent_id,
-                                )
+                                if result:
+                                    logger.info(
+                                        "Auto-closed task %s for agent %s "
+                                        "(agent did not emit update_task)",
+                                        msg.task_id, self.agent_id,
+                                    )
+                                else:
+                                    logger.warning(
+                                        "Auto-close REJECTED for task %s by agent %s "
+                                        "(invalid transition)",
+                                        msg.task_id, self.agent_id,
+                                    )
 
                 # Memory enforcement: remind agent to update memory after task completion
                 if msg.task_id and self._task_board:
@@ -331,6 +356,18 @@ class Agent:
                 self.last_error = f"{type(exc).__name__}: {exc}"
                 self.status = AgentStatus.ERROR
                 await self._broadcast_status()
+
+                # Return task to PENDING so it can be retried
+                if (msg.task_id and self._task_board):
+                    task = self._task_board.get_task(msg.task_id)
+                    if task and task.status == TaskStatus.IN_PROGRESS:
+                        await self._task_board.update_task(
+                            msg.task_id,
+                            status=TaskStatus.PENDING,
+                            _agent_id=self.agent_id,
+                            progress_note=f"Returned to pending — {type(exc).__name__}: {exc}",
+                        )
+
                 await asyncio.sleep(2)
                 # If session is paused, recover to SESSION_PAUSED instead of staying in ERROR
                 if (self.use_session and self._session_store
@@ -339,10 +376,59 @@ class Agent:
                     await self._broadcast_status()
             finally:
                 self.current_task_id = None
+                self._current_task_plan = None
                 self.messages_processed += 1
                 if self.status not in (AgentStatus.ERROR, AgentStatus.SESSION_PAUSED):
                     self.status = AgentStatus.IDLE
                     await self._broadcast_status()
+
+    async def _run_planning_phase(self, task, msg: Message) -> None:
+        """Invoke Claude to outline an approach before executing a task.
+
+        Posts the plan as a progress note on the ticket and stores it
+        in ``_current_task_plan`` so the execution prompt can reference it.
+        Failures are logged but never block task execution.
+        """
+        plan_prompt = (
+            "You are about to work on a task. Before starting, outline your approach.\n\n"
+            f"Task: {task.title}\n"
+            f"Description: {task.description or '(no description)'}\n\n"
+            f"Assignment message:\n{msg.content}\n\n"
+            "Respond with a concise numbered plan (3-7 steps). "
+            "Each step should be one clear action. Do not start working — only plan."
+        )
+        try:
+            plan_result = await self._subprocess.invoke(
+                prompt=plan_prompt,
+                model=self.model,
+                allowed_tools="",   # text-only, no tools
+                timeout=60,
+            )
+        except Exception as e:
+            logger.warning("Planning phase failed for task %s: %s", task.id, e)
+            return
+
+        if plan_result.is_error:
+            logger.warning(
+                "Planning phase returned error for task %s: %s",
+                task.id, plan_result.result_text[:200],
+            )
+            return
+
+        plan_text = plan_result.result_text.strip()
+        if not plan_text:
+            return
+
+        self._current_task_plan = plan_text
+        await self._task_board.update_task(
+            task.id,
+            _agent_id=self.agent_id,
+            progress_note=f"\U0001f4cb Plan:\n{plan_text}",
+        )
+        logger.info(
+            "Agent %s posted plan for task %s (%d chars)",
+            self.agent_id, task.id, len(plan_text),
+        )
 
     async def process_message(self, msg: Message) -> list[Message]:
         prompt = await self._build_prompt(msg)
@@ -400,6 +486,7 @@ class Agent:
                 self.agent_id,
                 duration_ms=result.duration_ms or 0,
                 is_error=result.is_error,
+                error_text=self.last_error if result.is_error else None,
                 cost_usd=result.cost_usd or 0.0,
                 input_tokens=result.input_tokens or 0,
                 output_tokens=result.output_tokens or 0,
@@ -623,6 +710,10 @@ class Agent:
             if task_ctx:
                 parts.append(f"[Current Task Board]\n{task_ctx}\n---")
 
+        # 3b. Active plan for current task
+        if self._current_task_plan and msg.task_id:
+            parts.append(f"[Your Plan for This Task]\n{self._current_task_plan}\n---")
+
         # 4. Original message
         parts.append(f"[Message from {msg.sender}]")
         parts.append(f"Type: {msg.type.value}")
@@ -646,6 +737,17 @@ class Agent:
         other_tasks = [t for t in tasks if t.id not in my_task_ids]
 
         lines = []
+
+        # Phase context
+        if self._phase_board:
+            phases = self._phase_board.get_all_phases()
+            if phases:
+                current = self._phase_board.get_current_phase()
+                lines.append("PROJECT PHASES:")
+                for p in phases:
+                    marker = " [CURRENT]" if (current and p["id"] == current["id"]) else ""
+                    lines.append(f"  - {p['name']} ({p['status']}){marker}")
+                lines.append("")
         if my_tasks:
             lines.append("YOUR TASKS (ordered by priority — review tasks first):")
             for t in my_tasks:
@@ -1108,13 +1210,16 @@ class Agent:
 
     async def _broadcast_status(self):
         if self._broker:
+            data = {
+                "agent_id": self.agent_id,
+                "status": self.status.value,
+                "current_task_id": self.current_task_id,
+            }
+            if self.last_error:
+                data["last_error"] = self.last_error
             await self._broker.broadcast_event({
                 "event_type": "agent_status",
-                "data": {
-                    "agent_id": self.agent_id,
-                    "status": self.status.value,
-                    "current_task_id": self.current_task_id,
-                },
+                "data": data,
             })
 
     def to_info_dict(self) -> dict:

@@ -22,6 +22,9 @@ class Document(Base, TimestampMixin, TenantMixin):
     source: Mapped[str | None] = mapped_column(String(20), nullable=True)
     source_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     created_by: Mapped[str] = mapped_column(String(100), default="unknown")
+    upload_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    file_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    file_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     comments: Mapped[list[DocumentComment]] = relationship(
         back_populates="document", cascade="all, delete-orphan",

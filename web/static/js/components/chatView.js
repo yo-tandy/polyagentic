@@ -16,6 +16,12 @@ const ChatView = {
                 this.send();
             }
         });
+
+        // File upload
+        this.fileInput = document.getElementById('chat-file-input');
+        const attachBtn = document.getElementById('chat-attach');
+        if (attachBtn) attachBtn.addEventListener('click', () => this.fileInput?.click());
+        if (this.fileInput) this.fileInput.addEventListener('change', () => this._handleFileUpload());
     },
 
     async send() {
@@ -108,6 +114,32 @@ const ChatView = {
             this._thinkingEl.remove();
             this._thinkingEl = null;
         }
+    },
+
+    async _handleFileUpload() {
+        const file = this.fileInput?.files?.[0];
+        if (!file) return;
+
+        this.addMessage('You', `Uploading: ${file.name}...`, 'user');
+        this._showThinking();
+
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('context', 'chat');
+
+        try {
+            const res = await fetch('/api/upload', { method: 'POST', body: formData });
+            if (!res.ok) {
+                this._hideThinking();
+                const err = await res.json();
+                this.addMessage('System', `Upload failed: ${err.error}`, 'agent');
+            }
+        } catch (err) {
+            this._hideThinking();
+            this.addMessage('System', `Upload failed: ${err.message}`, 'agent');
+        }
+
+        this.fileInput.value = '';
     },
 
     _escapeHtml(text) {

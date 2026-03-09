@@ -7,6 +7,7 @@ from enum import Enum
 
 
 class TaskStatus(str, Enum):
+    DRAFT = "draft"
     PENDING = "pending"
     IN_PROGRESS = "in_progress"
     REVIEW = "review"
@@ -31,6 +32,8 @@ class Task:
     reviewer: str | None = None
     paused_summary: str | None = None
     outcome: str | None = None  # "approved", "rejected", "complete" — set when task moves to done
+    category: str = "operational"
+    phase_id: str | None = None
     branch: str | None = None
     parent_task_id: str | None = None
     subtasks: list[str] = field(default_factory=list)
@@ -49,6 +52,8 @@ class Task:
         data = data.copy()
         data["status"] = TaskStatus(data["status"])
         data.setdefault("priority", 3)
+        data.setdefault("category", "operational")
+        data.setdefault("phase_id", None)
         data.setdefault("role", None)
         data.setdefault("labels", [])
         data.setdefault("reviewer", None)

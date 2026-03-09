@@ -49,7 +49,7 @@ class ConversationManager:
                      "timestamp": m.created_at.isoformat() if m.created_at else ""}
                     for m in messages
                 ],
-                "started_at": conv.created_at.isoformat() if conv.created_at else "",
+                "started_at": conv.started_at.isoformat() if conv.started_at else "",
             }
         logger.info("Loaded %d active conversations from DB", len(self._conversations))
 
@@ -75,7 +75,7 @@ class ConversationManager:
             "goals": goals,
             "state": ConversationState.ACTIVE,
             "messages": [],
-            "started_at": conv_record.created_at.isoformat() if conv_record.created_at else "",
+            "started_at": conv_record.started_at.isoformat() if conv_record.started_at else "",
         }
         self._conversations[conv["id"]] = conv
         logger.info(

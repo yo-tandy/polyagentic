@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from core.actions.base import BaseAction, ActionField, ActionContext
 from core.message import Message, MessageType
+from core.task import TaskStatus
 
 if TYPE_CHECKING:
     from core.agent import Agent
@@ -25,6 +26,15 @@ class AssignTicket(BaseAction):
         ActionField("priority", "integer",
                      description="Priority 1-5", default=3),
         ActionField("labels", "array", description="Tags"),
+        ActionField("category", "string",
+                     description="Task category: operational or project",
+                     default="operational",
+                     enum=["operational", "project"]),
+        ActionField("phase_id", "string",
+                     description="Phase ID for project tasks"),
+        ActionField("initial_status", "string",
+                     description="Initial status: draft (unassigned) or pending",
+                     enum=["draft", "pending"]),
     ]
 
     async def execute(
@@ -36,6 +46,10 @@ class AssignTicket(BaseAction):
         desc = action.get("task_description", "")
         priority = action.get("priority", 3)
         labels = action.get("labels", [])
+        category = action.get("category", "operational")
+        phase_id = action.get("phase_id")
+        initial_status_str = action.get("initial_status")
+        initial_status = TaskStatus(initial_status_str) if initial_status_str else None
 
         task_id = None
         if agent._task_board:
@@ -43,13 +57,17 @@ class AssignTicket(BaseAction):
                 title=title,
                 description=desc,
                 created_by=agent.agent_id,
-                assignee=to,
+                assignee=to if not initial_status or initial_status != TaskStatus.DRAFT else None,
                 priority=priority,
                 labels=labels,
+                category=category,
+                phase_id=phase_id,
+                initial_status=initial_status,
             )
             task_id = task.id
 
-        if to:
+        # Don't send message for draft tickets (they're not actionable yet)
+        if to and (not initial_status or initial_status != TaskStatus.DRAFT):
             return [Message(
                 sender=agent.agent_id,
                 recipient=to,

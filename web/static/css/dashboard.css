@@ -210,16 +210,48 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    cursor: pointer;
 }
 .status--session-paused { background: #2e2200; color: #fbbf24; }
 
 /* Task board */
+#task-board {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
 .task-columns {
     display: flex;
     gap: 8px;
-    height: 100%;
+    flex: 1;
+    min-height: 0;
     overflow-x: auto;
     padding-bottom: 4px;
+}
+
+.board-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 2px 0 4px;
+}
+
+.board-controls__label {
+    font-size: 10px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.board-controls__select {
+    font-size: 11px;
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 2px 6px;
+    cursor: pointer;
 }
 
 .task-column {
@@ -295,6 +327,13 @@
 .task-card__assignee {
     font-size: 10px;
     color: var(--text-muted);
+}
+
+.task-card__age {
+    font-size: 9px;
+    color: var(--text-muted);
+    margin-left: auto;
+    white-space: nowrap;
 }
 
 /* Task labels */
@@ -440,32 +479,42 @@
 }
 
 .progress-note {
-    display: flex;
-    gap: 8px;
-    align-items: baseline;
-    font-size: 11px;
-    padding: 4px 8px;
+    font-size: 12px;
+    padding: 8px 10px;
     background: var(--bg);
     border-left: 2px solid var(--accent);
     border-radius: 0 4px 4px 0;
+}
+
+.progress-note__meta {
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+    margin-bottom: 4px;
 }
 
 .progress-note__time {
     color: var(--text-muted);
     font-size: 10px;
     flex-shrink: 0;
-    min-width: 130px;
 }
 
 .progress-note__agent {
     color: var(--accent);
     font-weight: 600;
+    font-size: 11px;
     flex-shrink: 0;
 }
 
 .progress-note__text {
     color: var(--text);
 }
+
+.progress-note__text.kb-markdown p:first-child { margin-top: 0; }
+.progress-note__text.kb-markdown p:last-child  { margin-bottom: 0; }
+.progress-note__text.kb-markdown ol,
+.progress-note__text.kb-markdown ul { margin: 4px 0; padding-left: 20px; }
+.progress-note__text.kb-markdown li { margin: 2px 0; }
 
 /* Chat */
 /* Conversation Bar */
@@ -810,6 +859,27 @@
     background: var(--accent-muted);
 }
 
+.chat-file-input--hidden {
+    display: none;
+}
+
+.chat-attach-btn {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px 8px;
+    cursor: pointer;
+    font-size: 16px;
+    color: var(--text-dim);
+    flex-shrink: 0;
+    align-self: flex-end;
+}
+
+.chat-attach-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text);
+}
+
 .chat-message {
     padding: 8px 12px;
     margin-bottom: 8px;
@@ -1102,6 +1172,17 @@
     font-size: 11px;
     font-weight: 600;
     margin-bottom: 2px;
+}
+
+.kb-doc__type {
+    display: inline-block;
+    font-size: 8px;
+    font-weight: 700;
+    padding: 1px 4px;
+    border-radius: 3px;
+    background: var(--accent);
+    color: white;
+    vertical-align: middle;
 }
 
 .kb-doc__meta {
@@ -1981,6 +2062,36 @@
 .form-status--success { color: var(--green); }
 .form-status--info { color: var(--blue); }
 
+/* Upload area */
+.upload-area {
+    border: 2px dashed var(--border);
+    border-radius: 6px;
+    padding: 12px;
+    text-align: center;
+}
+
+.upload-area__input {
+    font-size: 12px;
+    margin-bottom: 4px;
+}
+
+.upload-area__hint {
+    font-size: 10px;
+    color: var(--text-dim);
+}
+
+/* KB download link */
+.kb-viewer__download {
+    color: var(--accent);
+    font-size: 11px;
+    text-decoration: none;
+    cursor: pointer;
+}
+
+.kb-viewer__download:hover {
+    text-decoration: underline;
+}
+
 /* Panel title button */
 .panel__title-btn {
     float: right;
@@ -2166,6 +2277,155 @@
     padding: 20px;
     color: var(--text-muted);
     font-size: 12px;
+}
+
+/* ── Phase Bar ── */
+.phase-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+    flex-shrink: 0;
+}
+
+.phase-bar__label {
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text-muted);
+    margin-right: 4px;
+    white-space: nowrap;
+}
+
+.phase-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 10px;
+    border-radius: 12px;
+    font-size: 10px;
+    font-weight: 600;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text-muted);
+    white-space: nowrap;
+    transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+
+.phase-pill:hover {
+    border-color: var(--accent-muted);
+    color: var(--text);
+}
+
+.phase-pill--active {
+    background: var(--accent-muted);
+    color: white;
+    border-color: var(--accent-muted);
+}
+
+.phase-pill__status {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.phase-status--planning          { background: var(--text-muted); }
+.phase-status--awaiting_approval { background: var(--orange); }
+.phase-status--in_progress       { background: #fbbf24; }
+.phase-status--review            { background: var(--blue); }
+.phase-status--completed         { background: var(--green); }
+
+/* Phase approval actions (inline in phase bar) */
+.phase-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+    padding-left: 12px;
+}
+
+.phase-actions__label {
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+.btn--approve {
+    background: var(--green);
+    color: white;
+    border: 1px solid var(--green);
+}
+
+.btn--approve:hover {
+    background: #16a34a;
+}
+
+.btn--reject {
+    background: transparent;
+    color: var(--red);
+    border: 1px solid var(--red);
+}
+
+.btn--reject:hover {
+    background: var(--red);
+    color: white;
+}
+
+.btn--danger {
+    background: transparent;
+    color: var(--red);
+    border: 1px solid var(--border);
+    margin-left: auto;
+    font-size: 10px;
+    opacity: 0.6;
+}
+
+.btn--danger:hover {
+    background: var(--red);
+    color: white;
+    opacity: 1;
+    border-color: var(--red);
+}
+
+/* ── Draft Column ── */
+.task-column[data-column="draft"] {
+    opacity: 0.7;
+}
+
+.task-column[data-column="draft"] .task-column__title {
+    border-bottom-style: dashed;
+}
+
+/* ── Category Badge ── */
+.task-badge {
+    display: inline-block;
+    font-size: 8px;
+    font-weight: 700;
+    padding: 1px 4px;
+    border-radius: 3px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    vertical-align: middle;
+    margin-left: 4px;
+}
+
+.task-badge--project {
+    background: var(--accent-muted);
+    color: white;
+}
+
+/* ── Phase info in task cards ── */
+.task-card__phase {
+    font-size: 9px;
+    color: var(--text-muted);
+    margin-top: 2px;
 }
 
 /* Responsive */

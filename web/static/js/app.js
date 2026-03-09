@@ -38,9 +38,10 @@ const App = {
     },
 
     async loadInitialState() {
-        const [agentsRes, tasksRes, activityRes, branchesRes, logRes, chatRes] = await Promise.all([
+        const [agentsRes, tasksRes, phasesRes, activityRes, branchesRes, logRes, chatRes] = await Promise.all([
             safeFetch('/api/agents', { agents: [] }),
             safeFetch('/api/tasks', { tasks: [] }),
+            safeFetch('/api/phases', { phases: [] }),
             safeFetch('/api/activity', { activity: [] }),
             safeFetch('/api/git/branches', { branches: [] }),
             safeFetch('/api/git/log', { log: [] }),
@@ -48,6 +49,7 @@ const App = {
         ]);
 
         AgentPanel.render(agentsRes.agents || []);
+        TaskBoard.updatePhases(phasesRes.phases || []);
         TaskBoard.render(tasksRes.tasks || []);
         ActivityLog.render(activityRes.activity || []);
         GitPanel.render(branchesRes.branches || [], logRes.log || []);
@@ -122,7 +124,7 @@ const App = {
     handleEvent(event) {
         switch (event.event_type) {
             case 'agent_status':
-                AgentPanel.updateStatus(event.data.agent_id, event.data.status);
+                AgentPanel.updateStatus(event.data.agent_id, event.data.status, event.data.last_error);
                 break;
 
             case 'chat_response':
@@ -150,6 +152,10 @@ const App = {
 
             case 'task_update':
                 this.refreshTasks();
+                break;
+
+            case 'phase_update':
+                this.refreshPhases();
                 break;
 
             case 'git_activity':
@@ -200,6 +206,11 @@ const App = {
         TaskBoard.render(res.tasks || []);
     },
 
+    async refreshPhases() {
+        const res = await safeFetch('/api/phases', { phases: [] });
+        TaskBoard.updatePhases(res.phases || []);
+    },
+
     async refreshAgents() {
         const res = await safeFetch('/api/agents', { agents: [] });
         AgentPanel.render(res.agents || []);
@@ -214,9 +225,10 @@ const App = {
     },
 
     startPolling() {
-        // Periodic refresh for tasks and git (in case WS events are missed)
+        // Periodic refresh for tasks, phases, and git (in case WS events are missed)
         setInterval(() => {
             this.refreshTasks();
+            this.refreshPhases();
             this.refreshGit();
         }, 10000);
     }

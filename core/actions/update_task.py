@@ -22,7 +22,7 @@ class UpdateTask(BaseAction):
                      description="The task ID to update"),
         ActionField("status", "string",
                      description="New status",
-                     enum=["pending", "in_progress", "review",
+                     enum=["draft", "pending", "in_progress", "review",
                            "done", "paused"]),
         ActionField("progress_note", "string",
                      description="Brief status update"),
@@ -52,7 +52,7 @@ class UpdateTask(BaseAction):
         for key in (
             "status", "assignee", "role", "priority", "reviewer",
             "progress_note", "completion_summary", "review_output",
-            "paused_summary", "labels", "outcome",
+            "paused_summary", "labels", "outcome", "category", "phase_id",
         ):
             if key in action:
                 updates[key] = action[key]

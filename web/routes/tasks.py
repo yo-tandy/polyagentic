@@ -7,9 +7,18 @@ router = APIRouter()
 
 
 @router.get("/tasks")
-async def get_tasks(request: Request):
+async def get_tasks(
+    request: Request,
+    category: str | None = None,
+    phase_id: str | None = None,
+):
     task_board = request.app.state.task_board
-    return {"tasks": task_board.to_summary()}
+    tasks = task_board.to_summary()
+    if category:
+        tasks = [t for t in tasks if t.get("category") == category]
+    if phase_id:
+        tasks = [t for t in tasks if t.get("phase_id") == phase_id]
+    return {"tasks": tasks}
 
 
 @router.get("/tasks/{task_id}")
@@ -58,3 +67,15 @@ async def update_task(task_id: str, body: TaskUpdateRequest, request: Request):
     if result is None:
         return {"error": "Update failed (invalid transition?)"}
     return result.to_dict()
+
+
+@router.delete("/tasks/{task_id}")
+async def delete_task(task_id: str, request: Request):
+    task_board = request.app.state.task_board
+    task = task_board.get_task(task_id)
+    if task is None:
+        return {"error": "Task not found"}
+    result = await task_board.delete_task(task_id)
+    if not result:
+        return {"error": "Delete failed"}
+    return {"deleted": task_id}

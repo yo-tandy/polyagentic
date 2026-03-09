@@ -41,7 +41,7 @@ const AgentPanel = {
         this.container.querySelectorAll('.agent-card').forEach(card => {
             card.addEventListener('click', (e) => {
                 // Don't trigger selection if clicking buttons
-                if (e.target.closest('.agent-card__status-btn') || e.target.closest('.agent-card__memory-btn') || e.target.closest('.agent-card__chat-btn')) return;
+                if (e.target.closest('.agent-card__status-btn') || e.target.closest('.agent-card__memory-btn') || e.target.closest('.agent-card__chat-btn') || e.target.closest('.agent-card__error')) return;
                 const agentId = card.dataset.agentId;
                 this._toggleSelect(agentId);
             });
@@ -71,6 +71,19 @@ const AgentPanel = {
                 e.stopPropagation();
                 const agentId = btn.dataset.agentId;
                 this._startChat(agentId, btn);
+            });
+        });
+
+        // Bind error bar expand/collapse (inline styles — immune to CSS caching)
+        this.container.querySelectorAll('.agent-card__error').forEach(el => {
+            el.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const expanded = el.dataset.expanded === '1';
+                el.dataset.expanded = expanded ? '0' : '1';
+                el.style.whiteSpace = expanded ? 'nowrap' : 'normal';
+                el.style.overflow = expanded ? 'hidden' : 'visible';
+                el.style.textOverflow = expanded ? 'ellipsis' : 'unset';
+                el.style.wordBreak = expanded ? '' : 'break-word';
             });
         });
 
@@ -175,13 +188,35 @@ const AgentPanel = {
         if (modal) modal.classList.remove('active');
     },
 
-    updateStatus(agentId, status) {
+    updateStatus(agentId, status, lastError) {
         const card = this.container?.querySelector(`[data-agent-id="${agentId}"]`);
         if (!card) return;
         const badge = card.querySelector('.agent-card__status');
         if (badge) {
             badge.className = `agent-card__status status--${status}`;
             badge.textContent = status;
+        }
+        // Update error bar
+        let errorEl = card.querySelector('.agent-card__error');
+        if (lastError) {
+            if (!errorEl) {
+                errorEl = document.createElement('div');
+                errorEl.className = 'agent-card__error';
+                errorEl.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const expanded = errorEl.dataset.expanded === '1';
+                    errorEl.dataset.expanded = expanded ? '0' : '1';
+                    errorEl.style.whiteSpace = expanded ? 'nowrap' : 'normal';
+                    errorEl.style.overflow = expanded ? 'hidden' : 'visible';
+                    errorEl.style.textOverflow = expanded ? 'ellipsis' : 'unset';
+                    errorEl.style.wordBreak = expanded ? '' : 'break-word';
+                });
+                card.appendChild(errorEl);
+            }
+            errorEl.textContent = lastError;
+            errorEl.title = lastError;
+        } else if (errorEl && status !== 'error') {
+            errorEl.remove();
         }
     }
 };

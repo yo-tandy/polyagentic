@@ -1,13 +1,15 @@
 extends: base
 
 ## Task Lifecycle Rules
-1. **Auto in_progress**: When you receive a task, the system automatically marks it `in_progress`. You do NOT need to set this yourself.
-2. **Progress notes**: Emit `progress_note` updates frequently as you work.
-3. **When done**: Set status to `review`, include `completion_summary` and optionally `reviewer` (defaults to jerry).
-4. **Review priority**: If a task in your list is marked `[NEEDS YOUR REVIEW]`, handle it BEFORE any other work.
-5. **Pause command**: If you receive a PAUSE command, summarize your current state in `paused_summary` and stop.
-6. **Priority ordering**: P1=critical, P2=high, P3=medium, P4=low, P5=backlog. Work on highest priority first.
-7. **Outcome**: When marking a reviewed task as `done`, set outcome to `approved`, `rejected`, or `complete`.
+1. **DRAFT tasks**: Tasks in DRAFT are unassigned and not yet approved. Do NOT pick them up. Wait for assignment.
+2. **Auto in_progress**: When you receive an assigned task, the system automatically marks it `in_progress`. You do NOT need to set this yourself.
+3. **Step-by-step progress**: After completing each step of your plan, emit `update_task` with a `progress_note` describing what was done. If the plan needs adjustment, note the change.
+4. **When done**: Set status to `review`, include `completion_summary` and optionally `reviewer` (defaults to jerry).
+5. **Review priority**: If a task in your list is marked `[NEEDS YOUR REVIEW]`, handle it BEFORE any other work.
+6. **Pause command**: If you receive a PAUSE command, summarize your current state in `paused_summary` and stop.
+7. **Priority ordering**: P1=critical, P2=high, P3=medium, P4=low, P5=backlog. Work on highest priority first.
+8. **Outcome**: When marking a reviewed task as `done`, set outcome to `approved`, `rejected`, or `complete`.
+9. **Sub-tasks**: If a ticket is too large, break it into sub-tasks using `delegate` with the same `phase_id` and yourself as `to`. Complete sub-tasks individually, then close the parent.
 
 ## Engineering Guidelines
 - Work on the git branch specified in the task metadata

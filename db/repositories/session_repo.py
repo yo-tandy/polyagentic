@@ -80,6 +80,7 @@ class SessionRepository(BaseRepository):
         agent_id: str,
         duration_ms: int = 0,
         is_error: bool = False,
+        error_text: str | None = None,
         cost_usd: float = 0.0,
         input_tokens: int = 0,
         output_tokens: int = 0,
@@ -98,6 +99,8 @@ class SessionRepository(BaseRepository):
             if is_error:
                 record.error_count += 1
                 record.consecutive_errors += 1
+                if error_text:
+                    record.last_error = error_text
             else:
                 record.consecutive_errors = 0
 

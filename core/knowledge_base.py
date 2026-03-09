@@ -12,7 +12,7 @@ from db.repositories.knowledge_repo import KnowledgeRepository
 
 logger = logging.getLogger(__name__)
 
-CATEGORIES = ["specs", "design", "architecture", "planning", "history"]
+CATEGORIES = ["specs", "design", "architecture", "planning", "history", "uploaded"]
 MAX_INDEX_SUMMARY_DOCS = 30
 
 
@@ -67,10 +67,10 @@ class KnowledgeBase:
                 category="repo",
                 content=content,
                 created_by="repo",
+                source="repo",
+                source_path=abs_path,
             )
             doc_dict = self._doc_to_dict(rec)
-            doc_dict["source"] = "repo"
-            doc_dict["source_path"] = abs_path
             self._docs_cache.append(doc_dict)
             added += 1
         if added:
@@ -90,6 +90,20 @@ class KnowledgeBase:
         doc_dict = self._doc_to_dict(rec)
         self._docs_cache.append(doc_dict)
         logger.info("KB: added document '%s' [%s] by %s", title, category, created_by)
+        return doc_dict
+
+    async def add_uploaded_document(
+        self, title: str, content: str, created_by: str,
+        upload_path: str, file_type: str, file_size: int,
+    ) -> dict:
+        """Add a document from a file upload."""
+        rec = await self._repo.add_document(
+            self._project_id, title, "uploaded", content, created_by,
+            upload_path=upload_path, file_type=file_type, file_size=file_size,
+        )
+        doc_dict = self._doc_to_dict(rec)
+        self._docs_cache.append(doc_dict)
+        logger.info("KB: added uploaded document '%s' [%s] by %s", title, file_type, created_by)
         return doc_dict
 
     async def update_document(self, doc_id: str, content: str, updated_by: str) -> dict | None:
@@ -199,7 +213,7 @@ class KnowledgeBase:
 
     @staticmethod
     def _doc_to_dict(rec) -> dict:
-        return {
+        d = {
             "id": rec.id,
             "title": rec.title,
             "category": rec.category,
@@ -210,6 +224,11 @@ class KnowledgeBase:
             "source": rec.source,
             "source_path": rec.source_path,
         }
+        if getattr(rec, "upload_path", None):
+            d["upload_path"] = rec.upload_path
+            d["file_type"] = rec.file_type
+            d["file_size"] = rec.file_size
+        return d
 
     @staticmethod
     def _comment_to_dict(rec) -> dict:

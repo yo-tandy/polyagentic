@@ -16,7 +16,8 @@ logger = logging.getLogger(__name__)
 PRIVILEGED_AGENTS = {"user", "manny", "jerry"}
 
 VALID_TRANSITIONS = {
-    TaskStatus.PENDING:     {TaskStatus.IN_PROGRESS, TaskStatus.BLOCKED, TaskStatus.PAUSED},
+    TaskStatus.DRAFT:       {TaskStatus.PENDING, TaskStatus.IN_PROGRESS},
+    TaskStatus.PENDING:     {TaskStatus.IN_PROGRESS, TaskStatus.BLOCKED, TaskStatus.PAUSED, TaskStatus.DRAFT},
     TaskStatus.IN_PROGRESS: {TaskStatus.REVIEW, TaskStatus.DONE, TaskStatus.BLOCKED, TaskStatus.PAUSED, TaskStatus.PENDING},
     TaskStatus.REVIEW:      {TaskStatus.DONE, TaskStatus.IN_PROGRESS, TaskStatus.PENDING},
     TaskStatus.BLOCKED:     {TaskStatus.PENDING, TaskStatus.IN_PROGRESS},
@@ -57,16 +58,23 @@ class TaskBoard:
     async def create_task(self, title: str, description: str, created_by: str,
                           assignee: str | None = None, role: str | None = None,
                           parent_task_id: str | None = None,
-                          priority: int = 3, labels: list[str] | None = None) -> Task:
+                          priority: int = 3, labels: list[str] | None = None,
+                          category: str = "operational",
+                          phase_id: str | None = None,
+                          initial_status: TaskStatus | None = None) -> Task:
+        status = initial_status or TaskStatus.PENDING
         task = Task(
             title=title,
             description=description,
             created_by=created_by,
+            status=status,
             assignee=assignee,
             role=role,
             priority=priority,
             labels=labels or [],
             parent_task_id=parent_task_id,
+            category=category,
+            phase_id=phase_id,
         )
         # Write to DB
         await self._repo.create(
@@ -82,6 +90,8 @@ class TaskBoard:
             labels=task.labels,
             parent_task_id=task.parent_task_id,
             created_by=task.created_by,
+            category=task.category,
+            phase_id=task.phase_id,
         )
         # Update cache
         self._tasks[task.id] = task
@@ -161,6 +171,24 @@ class TaskBoard:
         self._notify(task_id)
         return task
 
+    async def delete_task(self, task_id: str) -> bool:
+        """Delete a task from DB and cache."""
+        task = self._tasks.get(task_id)
+        if not task:
+            return False
+        result = await self._repo.delete(task_id)
+        if result:
+            del self._tasks[task_id]
+            if task.parent_task_id and task.parent_task_id in self._tasks:
+                parent = self._tasks[task.parent_task_id]
+                parent.subtasks = [s for s in parent.subtasks if s != task_id]
+            self._notify(task_id)
+        return result
+
+    def list_tasks(self) -> list[Task]:
+        """Alias for get_all_tasks (used by activation check)."""
+        return list(self._tasks.values())
+
     # ── Reads (sync, from cache) ─────────────────────────────────
 
     def get_task(self, task_id: str) -> Task | None:
@@ -192,6 +220,16 @@ class TaskBoard:
 
         return sorted(tasks, key=sort_key)
 
+    def get_tasks_by_phase(self, phase_id: str) -> list[Task]:
+        return [t for t in self._tasks.values() if t.phase_id == phase_id]
+
+    def get_tasks_by_category(self, category: str) -> list[Task]:
+        return [t for t in self._tasks.values() if t.category == category]
+
+    def is_phase_complete(self, phase_id: str) -> bool:
+        phase_tasks = self.get_tasks_by_phase(phase_id)
+        return len(phase_tasks) > 0 and all(t.status == TaskStatus.DONE for t in phase_tasks)
+
     def to_summary(self) -> list[dict]:
         return [t.to_dict() for t in self._tasks.values()]
 
@@ -200,6 +238,21 @@ class TaskBoard:
     @staticmethod
     def _db_to_task(rec) -> Task:
         """Convert a TaskModel ORM object to a core.task.Task."""
+        # Preserve DB timestamps (datetime → ISO string)
+        created = getattr(rec, "created_at", None)
+        updated = getattr(rec, "updated_at", None)
+        created_str = created.isoformat() if created else datetime.now(timezone.utc).isoformat()
+        updated_str = updated.isoformat() if updated else created_str
+
+        # Convert progress notes from ORM relationship to dicts
+        notes = []
+        for pn in getattr(rec, "progress_notes", None) or []:
+            notes.append({
+                "timestamp": pn.created_at,
+                "agent": pn.agent_id,
+                "note": pn.note,
+            })
+
         return Task(
             id=rec.id,
             title=rec.title,
@@ -212,4 +265,16 @@ class TaskBoard:
             parent_task_id=rec.parent_task_id,
             status=TaskStatus(rec.status) if rec.status else TaskStatus.PENDING,
             reviewer=rec.reviewer,
+            category=getattr(rec, "category", None) or "operational",
+            phase_id=getattr(rec, "phase_id", None),
+            created_at=created_str,
+            updated_at=updated_str,
+            branch=rec.branch,
+            paused_summary=rec.paused_summary,
+            outcome=rec.outcome,
+            completion_summary=rec.completion_summary,
+            review_output=rec.review_output,
+            progress_notes=notes,
+            subtasks=rec.subtasks or [],
+            messages=rec.messages or [],
         )

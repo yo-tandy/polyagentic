@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import ForeignKey, Integer, JSON, String, Text, Index
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db.models.base import Base, TimestampMixin, TenantMixin
@@ -25,6 +25,10 @@ class TaskModel(Base, TimestampMixin, TenantMixin):
     branch: Mapped[str | None] = mapped_column(String(200), nullable=True)
     parent_task_id: Mapped[str | None] = mapped_column(
         String(20), ForeignKey("tasks.id"), nullable=True,
+    )
+    category: Mapped[str] = mapped_column(String(20), default="operational")
+    phase_id: Mapped[str | None] = mapped_column(
+        String(20), ForeignKey("phases.id"), nullable=True, index=True,
     )
     subtasks: Mapped[list] = mapped_column(JSON, default=list)
     messages: Mapped[list] = mapped_column(JSON, default=list)

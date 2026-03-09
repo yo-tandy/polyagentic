@@ -106,10 +106,12 @@ const ProjectSelector = {
     async createProject() {
         const nameInput = document.getElementById('new-project-name');
         const descInput = document.getElementById('new-project-description');
+        const fileInput = document.getElementById('new-project-files');
         const statusEl = document.getElementById('new-project-status');
 
         const name = nameInput?.value?.trim();
         const description = descInput?.value?.trim();
+        const files = fileInput?.files || [];
 
         if (!name) {
             if (statusEl) {
@@ -125,6 +127,7 @@ const ProjectSelector = {
         }
 
         try {
+            // 1. Create project
             const res = await fetch('/api/projects', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -141,10 +144,34 @@ const ProjectSelector = {
             }
 
             const data = await res.json();
-            this.hideNewProjectModal();
 
-            // Activate the new project
-            await this.switchProject(data.project.id);
+            // 2. Activate project (without reload)
+            const actRes = await fetch(`/api/projects/${data.project.id}/activate`, {
+                method: 'POST',
+            });
+            if (!actRes.ok) {
+                console.error('Failed to activate project');
+                location.reload();
+                return;
+            }
+
+            // 3. Upload files if any
+            if (files.length > 0) {
+                if (statusEl) {
+                    statusEl.textContent = `Uploading ${files.length} file(s)...`;
+                    statusEl.className = 'form-status form-status--info';
+                }
+                for (const file of files) {
+                    const formData = new FormData();
+                    formData.append('file', file);
+                    formData.append('context', 'project');
+                    formData.append('description', `Uploaded during project creation for "${name}"`);
+                    await fetch('/api/upload', { method: 'POST', body: formData });
+                }
+            }
+
+            // 4. Reload to pick up new project state
+            location.reload();
         } catch (err) {
             console.error('Failed to create project:', err);
             if (statusEl) {

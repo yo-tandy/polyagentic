@@ -128,6 +128,9 @@ const ConversationWindow = {
                 ${goalsHtml}
                 <div class="conv-window__messages" id="conv-window-messages"></div>
                 <div class="conv-window__input">
+                    <input type="file" id="conv-file-input" class="chat-file-input--hidden"
+                           accept=".pdf,.docx,.txt,.md,.png,.jpg,.jpeg">
+                    <button class="chat-attach-btn" id="conv-attach" title="Attach document">&#x1F4CE;</button>
                     <textarea id="conv-window-input" placeholder="Message ${this._escapeHtml(activeConv.data.agent_id)}..." rows="2"></textarea>
                     <button id="conv-window-send">Send</button>
                 </div>
@@ -197,6 +200,12 @@ const ConversationWindow = {
                 this._send();
             }
         });
+
+        // File upload
+        const convFileInput = document.getElementById('conv-file-input');
+        const convAttach = document.getElementById('conv-attach');
+        if (convAttach) convAttach.addEventListener('click', () => convFileInput?.click());
+        if (convFileInput) convFileInput.addEventListener('change', () => this._handleFileUpload(convFileInput));
     },
 
     _renderMessageToEl(container, msg) {
@@ -268,6 +277,36 @@ const ConversationWindow = {
             this._hideThinkingForActive();
             this.addMessage('System', 'Failed to send message.', 'agent', { conversation_id: this._activeTabId });
         }
+    },
+
+    async _handleFileUpload(fileInput) {
+        const file = fileInput?.files?.[0];
+        if (!file || !this._activeTabId) return;
+
+        const conv = this._conversations[this._activeTabId];
+        if (!conv) return;
+
+        this.addMessage('You', `Uploading: ${file.name}...`, 'user', { conversation_id: this._activeTabId });
+        this._showThinking();
+
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('context', 'chat');
+        formData.append('target_agent', conv.data.agent_id);
+
+        try {
+            const res = await fetch('/api/upload', { method: 'POST', body: formData });
+            if (!res.ok) {
+                this._hideThinkingForActive();
+                const err = await res.json();
+                this.addMessage('System', `Upload failed: ${err.error}`, 'agent', { conversation_id: this._activeTabId });
+            }
+        } catch (err) {
+            this._hideThinkingForActive();
+            this.addMessage('System', `Upload failed: ${err.message}`, 'agent', { conversation_id: this._activeTabId });
+        }
+
+        fileInput.value = '';
     },
 
     // ── Close ──

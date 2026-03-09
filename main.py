@@ -22,8 +22,9 @@ from config import BASE_DIR, TEAM_CONFIG_FILE, WEB_HOST, WEB_PORT, DEFAULT_MODEL
 from core.agent_registry import AgentRegistry
 from core.action_registry import create_default_registry
 from core.message_broker import MessageBroker
-from core.session_store import SessionStore
+from core.session_store import SessionState, SessionStore
 from core.task_board import TaskBoard
+from core.phase_board import PhaseBoard
 from core.git_manager import GitManager
 from core.project_store import ProjectStore
 from core.container_manager import ContainerManager
@@ -46,6 +47,7 @@ from db.repositories.config_repo import ConfigRepository
 from db.repositories.project_repo import ProjectRepository
 from db.repositories.session_repo import SessionRepository
 from db.repositories.task_repo import TaskRepository
+from db.repositories.phase_repo import PhaseRepository
 from db.repositories.knowledge_repo import KnowledgeRepository
 from db.repositories.memory_repo import MemoryRepository
 from db.repositories.conversation_repo import ConversationRepository
@@ -154,8 +156,18 @@ class ProjectLifecycleManager:
         session_store = SessionStore(session_repo, project_id)
         await session_store.load()
 
+        # Reset paused sessions so agents can work after restart
+        for agent_id, info in session_store.get_all_info().items():
+            if info.get("state") == "paused":
+                await session_store.set_state(agent_id, SessionState.ACTIVE)
+                logger.info("Reset paused session for %s to active on startup", agent_id)
+
         task_board = TaskBoard(task_repo, project_id)
         await task_board.load()
+
+        phase_repo = PhaseRepository(self._sf)
+        phase_board = PhaseBoard(phase_repo, project_id)
+        await phase_board.load()
 
         memory_manager = MemoryManager(
             memory_repo,
@@ -196,6 +208,14 @@ class ProjectLifecycleManager:
                 "data": {"task_id": task_id},
             }))
         task_board.set_on_update(_task_update_broadcaster)
+
+        # Wire phase board → WebSocket broadcast on every update
+        def _phase_update_broadcaster(phase_id: str):
+            asyncio.ensure_future(broker.broadcast_event({
+                "event_type": "phase_update",
+                "data": {"phase_id": phase_id},
+            }))
+        phase_board.set_on_update(_phase_update_broadcaster)
 
         # Action registry (centralized action handling)
         action_registry = create_default_registry()
@@ -309,7 +329,7 @@ class ProjectLifecycleManager:
 
         # Configure all agents
         for agent in registry.get_all():
-            agent.configure(session_store, broker, task_board, memory_manager, knowledge_base, conversation_manager, action_registry)
+            agent.configure(session_store, broker, task_board, memory_manager, knowledge_base, conversation_manager, action_registry, phase_board=phase_board)
             agent._user_facing_agent = team_structure.user_facing_agent
 
         # Set privileged agents on task board
@@ -357,22 +377,36 @@ class ProjectLifecycleManager:
         # Notify the user-facing agent about the project
         ufa = team_structure.user_facing_agent
         project_desc = project.get("description", "")
-        welcome = f"Project '{project.get('name', project_id)}' has been activated."
-        if project_desc:
-            welcome += f"\n\nProject description:\n{project_desc}"
-            welcome += (
-                "\n\nAnalyze this project description. Share your initial understanding "
-                "with the user — what you think this project is about, key areas of work, "
-                "and any immediate questions. Then kick off the Project Lifecycle Flow: "
-                "delegate to Perry to start building a product spec by interviewing the user "
-                "for deeper requirements. Save your initial understanding to project memory."
+        is_reactivation = len(task_board.list_tasks()) > 0
+
+        if is_reactivation:
+            # Re-activation: lightweight message, don't re-trigger lifecycle flow
+            welcome = (
+                f"Project '{project.get('name', project_id)}' is back online (server restart). "
+                "IMPORTANT: Do NOT create any new tickets. Do NOT delegate status rollups. "
+                "Do NOT delegate any tasks. The board already has existing tasks — "
+                "review them and resume coordination. "
+                "Greet the user and briefly summarize current board state."
             )
         else:
-            welcome += (
-                "\n\nThis project has no description yet. Greet the user and ask them "
-                "to describe what they'd like to build. Use suggested_answers to offer "
-                "common project types as starting points."
-            )
+            # First activation: full lifecycle kickoff
+            welcome = f"Project '{project.get('name', project_id)}' has been activated."
+            if project_desc:
+                welcome += f"\n\nProject description:\n{project_desc}"
+                welcome += (
+                    "\n\nAnalyze this project description. Share your initial understanding "
+                    "with the user — what you think this project is about, key areas of work, "
+                    "and any immediate questions. Then kick off the Project Lifecycle Flow: "
+                    "delegate to Perry to start building a product spec by interviewing the user "
+                    "for deeper requirements. Save your initial understanding to project memory."
+                )
+            else:
+                welcome += (
+                    "\n\nThis project has no description yet. Greet the user and ask them "
+                    "to describe what they'd like to build. Use suggested_answers to offer "
+                    "common project types as starting points."
+                )
+
         welcome_msg = Message(
             sender="system",
             recipient=ufa,
@@ -403,6 +437,7 @@ class ProjectLifecycleManager:
             "container_manager": container_manager,
             "conversation_manager": conversation_manager,
             "action_registry": action_registry,
+            "phase_board": phase_board,
             "project_id": project_id,
             "config_provider": self._config,
             "role_repo": role_repo,

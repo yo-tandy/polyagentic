@@ -56,7 +56,7 @@ class ProjectStore:
         project_dir = self.projects_dir / project_id
 
         # Create directory tree (still needed for file-based operations)
-        for subdir in ["messages", "workspace", "worktrees", "memory"]:
+        for subdir in ["messages", "workspace", "worktrees", "memory", "uploads"]:
             (project_dir / subdir).mkdir(parents=True, exist_ok=True)
 
         # Write to DB

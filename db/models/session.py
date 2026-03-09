@@ -23,6 +23,7 @@ class AgentSession(Base, TimestampMixin, TenantMixin):
     request_count: Mapped[int] = mapped_column(Integer, default=0)
     error_count: Mapped[int] = mapped_column(Integer, default=0)
     consecutive_errors: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str | None] = mapped_column(String, nullable=True)
     total_duration_ms: Mapped[int] = mapped_column(BigInteger, default=0)
     total_cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
     total_input_tokens: Mapped[int] = mapped_column(BigInteger, default=0)

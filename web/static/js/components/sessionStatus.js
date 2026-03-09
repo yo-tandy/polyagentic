@@ -72,6 +72,18 @@ const SessionStatus = {
                 this._handleModelChange(sel.dataset.agentId, sel.value, sel);
             });
         });
+
+        // Bind warning bar click → toggle error details
+        this.listEl.querySelectorAll('.session-card__warning').forEach(warn => {
+            warn.addEventListener('click', () => {
+                const errorEl = warn.nextElementSibling;
+                if (errorEl && errorEl.classList.contains('session-card__error')) {
+                    const hidden = errorEl.style.display === 'none';
+                    errorEl.style.display = hidden ? 'block' : 'none';
+                    warn.textContent = warn.textContent.replace(/[▸▾]/, hidden ? '▾' : '▸');
+                }
+            });
+        });
     },
 
     _renderSession(s) {
@@ -133,15 +145,17 @@ const SessionStatus = {
                     </div>
                 </div>
                 ${!isStateless && s.consecutive_errors > 0 ? `
-                    <div class="session-card__warning">
-                        ${s.consecutive_errors} consecutive error(s)
+                    <div class="session-card__warning" style="cursor:pointer" title="Click to toggle error details">
+                        ${s.consecutive_errors} consecutive error(s) ▸
                     </div>
-                ` : ''}
-                ${s.last_error ? `
+                    <div class="session-card__error" style="display:none">
+                        <strong>Last error:</strong> ${s.last_error ? this._escapeHtml(s.last_error) : '<em>Details lost (server restarted)</em>'}
+                    </div>
+                ` : (s.last_error ? `
                     <div class="session-card__error">
                         <strong>Last error:</strong> ${this._escapeHtml(s.last_error)}
                     </div>
-                ` : ''}
+                ` : '')}
                 <div class="session-card__meta">
                     <span>Session: ${sessionIdShort}</span>
                     <label class="session-model">

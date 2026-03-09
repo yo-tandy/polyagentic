@@ -31,6 +31,11 @@ class KnowledgeRepository(BaseRepository):
         content: str,
         created_by: str = "unknown",
         tenant_id: str = "default",
+        upload_path: str | None = None,
+        file_type: str | None = None,
+        file_size: int | None = None,
+        source: str | None = None,
+        source_path: str | None = None,
     ) -> Document:
         async with self._session() as session:
             slug = title.lower().replace(" ", "-")[:60]
@@ -43,6 +48,11 @@ class KnowledgeRepository(BaseRepository):
                 filename=f"{slug}.md",
                 content=content,
                 created_by=created_by,
+                upload_path=upload_path,
+                file_type=file_type,
+                file_size=file_size,
+                source=source,
+                source_path=source_path,
             )
             session.add(doc)
             await session.commit()

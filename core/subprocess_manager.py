@@ -11,6 +11,18 @@ from config import CLAUDE_CLI
 
 logger = logging.getLogger(__name__)
 
+# Patterns that indicate an OAuth / API-key authentication failure
+_AUTH_ERROR_PATTERNS = [
+    "401",
+    "oauth token has expired",
+    "token expired",
+    "authentication failed",
+    "failed to authenticate",
+    "unauthorized",
+    "invalid api key",
+    "invalid x-api-key",
+]
+
 
 @dataclass
 class SubprocessResult:
@@ -24,6 +36,56 @@ class SubprocessResult:
 
 
 class SubprocessManager:
+
+    _auth_refreshed: bool = False  # class-level flag to avoid repeated refreshes
+
+    @staticmethod
+    def _is_auth_error(text: str) -> bool:
+        """Return True if *text* looks like an authentication / token error."""
+        lower = text.lower()
+        return any(pat in lower for pat in _AUTH_ERROR_PATTERNS)
+
+    async def _refresh_auth(self) -> bool:
+        """Attempt to refresh the Claude CLI OAuth token.
+
+        Runs ``claude auth status`` first — if the CLI reports ``loggedIn: true``
+        the token is likely still valid (or was auto-refreshed).  If not, tries
+        ``claude auth login`` which triggers the interactive OAuth flow.
+
+        Returns True if the refresh looks successful.
+        """
+        logger.info("Attempting Claude CLI auth refresh …")
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                CLAUDE_CLI, "auth", "status", "--output", "json",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=15)
+            status_text = stdout.decode(errors="replace").strip()
+            logger.info("Auth status after refresh attempt: %s", status_text[:200])
+
+            try:
+                status = json.loads(status_text)
+                if status.get("loggedIn"):
+                    logger.info("Claude CLI reports loggedIn=true — token refreshed")
+                    return True
+            except json.JSONDecodeError:
+                pass
+
+            # Token still invalid — try an explicit login
+            logger.warning("Claude CLI not logged in, attempting `auth login` …")
+            proc2 = await asyncio.create_subprocess_exec(
+                CLAUDE_CLI, "auth", "login",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await asyncio.wait_for(proc2.communicate(), timeout=30)
+            return proc2.returncode == 0
+
+        except Exception as e:
+            logger.error("Auth refresh failed: %s", e)
+            return False
 
     def _build_claude_args(
         self,
@@ -101,6 +163,7 @@ class SubprocessManager:
         working_dir: Path | None = None,
         timeout: int = 300,
         max_budget_usd: float | None = None,
+        _auth_retry: bool = False,
     ) -> SubprocessResult:
         cmd = self._build_claude_args(
             prompt, system_prompt, model, allowed_tools, session_id, max_budget_usd,
@@ -138,16 +201,57 @@ class SubprocessManager:
             )
 
         stderr_text = stderr.decode(errors="replace").strip()
+        raw_stdout = stdout.decode(errors="replace").strip()
+
+        # --- Auth-error detection & automatic retry -----------------------
+        # Check all available output for authentication errors. If found,
+        # refresh the OAuth token and retry the invocation once.
+        if not _auth_retry:
+            combined_output = f"{raw_stdout}\n{stderr_text}"
+            if self._is_auth_error(combined_output):
+                logger.warning(
+                    "Auth error detected (rc=%d), attempting token refresh and retry …",
+                    returncode,
+                )
+                await self._refresh_auth()
+                return await self.invoke(
+                    prompt=prompt,
+                    system_prompt=system_prompt,
+                    model=model,
+                    allowed_tools=allowed_tools,
+                    session_id=session_id,
+                    working_dir=working_dir,
+                    timeout=timeout,
+                    max_budget_usd=max_budget_usd,
+                    _auth_retry=True,  # prevent infinite loop
+                )
+        # ------------------------------------------------------------------
+
         if returncode != 0:
             # Claude CLI may return rc=1 with error info in stdout JSON
             # (e.g. rate limits, context overflow). Try parsing stdout first.
-            raw = stdout.decode(errors="replace").strip()
-            if raw:
+            if raw_stdout:
                 try:
-                    data = json.loads(raw)
+                    data = json.loads(raw_stdout)
                     if "result" in data or "is_error" in data:
                         logger.warning("Claude CLI rc=%d but stdout has JSON — parsing it", returncode)
-                        return self._parse_output(raw, session_id)
+                        parsed = self._parse_output(raw_stdout, session_id)
+                        # Even inside JSON output, check for auth errors
+                        if not _auth_retry and self._is_auth_error(parsed.result_text):
+                            logger.warning("Auth error in JSON result, refreshing and retrying …")
+                            await self._refresh_auth()
+                            return await self.invoke(
+                                prompt=prompt,
+                                system_prompt=system_prompt,
+                                model=model,
+                                allowed_tools=allowed_tools,
+                                session_id=session_id,
+                                working_dir=working_dir,
+                                timeout=timeout,
+                                max_budget_usd=max_budget_usd,
+                                _auth_retry=True,
+                            )
+                        return parsed
                 except json.JSONDecodeError:
                     pass
             # Fallback: no usable JSON on stdout
@@ -165,9 +269,8 @@ class SubprocessManager:
         if stderr_text:
             logger.debug("Claude CLI stderr: %s", stderr_text[:200])
 
-        raw = stdout.decode(errors="replace").strip()
-        logger.info("Claude CLI returned %d bytes (rc=0)", len(raw))
-        return self._parse_output(raw, session_id)
+        logger.info("Claude CLI returned %d bytes (rc=0)", len(raw_stdout))
+        return self._parse_output(raw_stdout, session_id)
 
     def _parse_output(self, raw: str, fallback_session_id: str | None) -> SubprocessResult:
         try:

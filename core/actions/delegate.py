@@ -28,6 +28,12 @@ class Delegate(BaseAction):
                      description="Tags for the task"),
         ActionField("role", "string",
                      description="Target role if agent ID unknown"),
+        ActionField("category", "string",
+                     description="Task category: operational or project",
+                     default="operational",
+                     enum=["operational", "project"]),
+        ActionField("phase_id", "string",
+                     description="Phase ID for project tasks"),
     ]
 
     example = {
@@ -48,6 +54,8 @@ class Delegate(BaseAction):
         priority = action.get("priority", 3)
         labels = action.get("labels", [])
         role = action.get("role", None)
+        category = action.get("category", "operational")
+        phase_id = action.get("phase_id")
 
         # Smart routing: agents with _registry check if target exists
         registry = agent.deps.get("registry")
@@ -66,6 +74,8 @@ class Delegate(BaseAction):
                 role=role or (to if (registry and not is_known_agent) else None),
                 priority=priority,
                 labels=labels,
+                category=category,
+                phase_id=phase_id,
             )
             task_id = task.id
 

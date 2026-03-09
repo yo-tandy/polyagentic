@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -54,6 +55,22 @@ async def init_db(url: str | None = None) -> None:
     from db.models import Base  # noqa: F811 — triggers all model imports
     async with _engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+    # Lightweight column migrations for SQLite (create_all won't add new columns)
+    async with _engine.begin() as conn:
+        for stmt in [
+            "ALTER TABLE agent_sessions ADD COLUMN last_error TEXT",
+            "ALTER TABLE documents ADD COLUMN upload_path VARCHAR(1000)",
+            "ALTER TABLE documents ADD COLUMN file_type VARCHAR(20)",
+            "ALTER TABLE documents ADD COLUMN file_size INTEGER",
+            "ALTER TABLE tasks ADD COLUMN category VARCHAR(20) DEFAULT 'operational'",
+            "ALTER TABLE tasks ADD COLUMN phase_id VARCHAR(20) REFERENCES phases(id)",
+        ]:
+            try:
+                await conn.execute(text(stmt))
+                logger.info("Migration applied: %s", stmt)
+            except Exception:
+                pass  # Column already exists
 
     logger.info("Database tables created/verified")
 

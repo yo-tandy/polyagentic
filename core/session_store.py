@@ -62,6 +62,7 @@ class SessionStore:
             "killed_at": rec.killed_at.isoformat() if rec.killed_at else None,
             "model": rec.model,
             "prompt_hash": rec.prompt_hash,
+            "last_error": rec.last_error,
         }
 
     # ── Cached reads (sync — used in hot path) ──────────────────
@@ -143,6 +144,7 @@ class SessionStore:
         agent_id: str,
         duration_ms: int,
         is_error: bool,
+        error_text: str | None = None,
         cost_usd: float = 0.0,
         input_tokens: int = 0,
         output_tokens: int = 0,
@@ -152,6 +154,7 @@ class SessionStore:
             self._project_id, agent_id,
             duration_ms=duration_ms,
             is_error=is_error,
+            error_text=error_text,
             cost_usd=cost_usd,
             input_tokens=input_tokens,
             output_tokens=output_tokens,

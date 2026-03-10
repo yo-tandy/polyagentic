@@ -27,3 +27,5 @@ class AgentRole(Base, TimestampMixin, TenantMixin):
     max_budget_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
     deps: Mapped[list] = mapped_column(JSON, default=list)
     allowed_actions: Mapped[list] = mapped_column(JSON, default=list)
+    provider: Mapped[str] = mapped_column(String(20), default="claude-cli")
+    fallback_provider: Mapped[str | None] = mapped_column(String(20), nullable=True)

@@ -121,6 +121,7 @@ async def get_active_project_info(request: Request):
             "id": info["id"],
             "name": info["name"],
             "role": info["role"],
+            "provider": getattr(agent, "_provider_name", "claude-cli"),
             "model": model,
             "status": info["status"],
             "request_count": req_count,

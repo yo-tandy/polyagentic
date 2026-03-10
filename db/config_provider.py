@@ -56,6 +56,14 @@ DEFAULT_CONFIG_SEEDS: list[dict] = [
     {"scope": "system", "key": "CONSECUTIVE_ERROR_THRESHOLD", "value": "3",
      "value_type": "int", "description": "Auto-pause after N consecutive errors"},
 
+    # ── API keys for alternative providers ─────────────────────
+    {"scope": "system", "key": "ANTHROPIC_API_KEY", "value": "",
+     "value_type": "string", "description": "Anthropic API key (for Claude API provider)"},
+    {"scope": "system", "key": "OPENAI_API_KEY", "value": "",
+     "value_type": "string", "description": "OpenAI API key"},
+    {"scope": "system", "key": "GOOGLE_API_KEY", "value": "",
+     "value_type": "string", "description": "Google API key (for Gemini provider)"},
+
     # ── Agent scope ───────────────────────────────────────────────
     # Manny
     {"scope": "agent", "scope_id": "manny", "key": "timeout",

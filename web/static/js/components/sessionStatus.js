@@ -4,6 +4,13 @@ const SessionStatus = {
     modal: null,
     listEl: null,
 
+    PROVIDER_MODELS: {
+        'claude-cli': ['sonnet', 'opus', 'haiku'],
+        'claude-api': ['sonnet', 'opus', 'haiku'],
+        'openai': ['gpt-4o', 'gpt-4o-mini', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4.1-nano', 'o3', 'o3-mini', 'o4-mini'],
+        'gemini': ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-2.0-flash-lite'],
+    },
+
     init() {
         this.modal = document.getElementById('session-status-modal');
         this.listEl = document.getElementById('session-status-list');
@@ -70,6 +77,13 @@ const SessionStatus = {
         this.listEl.querySelectorAll('.session-model-select').forEach(sel => {
             sel.addEventListener('change', () => {
                 this._handleModelChange(sel.dataset.agentId, sel.value, sel);
+            });
+        });
+
+        // Bind provider selectors
+        this.listEl.querySelectorAll('.session-provider-select').forEach(sel => {
+            sel.addEventListener('change', () => {
+                this._handleProviderChange(sel.dataset.agentId, sel.value, sel);
             });
         });
 
@@ -159,9 +173,17 @@ const SessionStatus = {
                 <div class="session-card__meta">
                     <span>Session: ${sessionIdShort}</span>
                     <label class="session-model">
+                        <span class="session-model__label">Provider:</span>
+                        <select class="session-provider-select" data-agent-id="${s.agent_id}">
+                            ${['claude-cli', 'claude-api', 'openai', 'gemini'].map(p =>
+                                `<option value="${p}"${p === (s.provider || 'claude-cli') ? ' selected' : ''}>${p}</option>`
+                            ).join('')}
+                        </select>
+                    </label>
+                    <label class="session-model">
                         <span class="session-model__label">Model:</span>
                         <select class="session-model-select" data-agent-id="${s.agent_id}">
-                            ${['sonnet', 'opus', 'haiku'].map(m =>
+                            ${(this.PROVIDER_MODELS[s.provider || 'claude-cli'] || this.PROVIDER_MODELS['claude-cli']).map(m =>
                                 `<option value="${m}"${m === s.model ? ' selected' : ''}>${m}</option>`
                             ).join('')}
                         </select>
@@ -208,6 +230,43 @@ const SessionStatus = {
         }
         btn.disabled = false;
         btn.textContent = origText;
+    },
+
+    async _handleProviderChange(agentId, provider, sel) {
+        sel.disabled = true;
+
+        // Immediately update the model dropdown to show models for the new provider
+        const card = sel.closest('.session-card');
+        const modelSel = card?.querySelector('.session-model-select');
+        if (modelSel) {
+            const models = this.PROVIDER_MODELS[provider] || this.PROVIDER_MODELS['claude-cli'];
+            modelSel.innerHTML = models.map((m, i) =>
+                `<option value="${m}"${i === 0 ? ' selected' : ''}>${m}</option>`
+            ).join('');
+        }
+
+        try {
+            const res = await fetch(`/api/sessions/${agentId}/provider`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ provider }),
+            });
+            if (!res.ok) {
+                const data = await res.json();
+                console.error('Provider change failed:', data.error);
+                await this.loadSessions(); // revert to actual value
+            } else {
+                // Also update the model to the first model for this provider
+                const newModel = (this.PROVIDER_MODELS[provider] || this.PROVIDER_MODELS['claude-cli'])[0];
+                if (modelSel) {
+                    await this._handleModelChange(agentId, newModel, modelSel);
+                }
+            }
+        } catch (err) {
+            console.error('Provider change error:', err);
+            await this.loadSessions();
+        }
+        sel.disabled = false;
     },
 
     async _handleModelChange(agentId, model, sel) {

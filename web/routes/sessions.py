@@ -41,6 +41,8 @@ async def get_sessions(request: Request):
             "paused_at": info.get("paused_at"),
             "killed_at": info.get("killed_at"),
             "last_error": info.get("last_error") or agent.last_error,
+            "provider": getattr(agent, "_provider_name", "claude-cli"),
+            "fallback_provider": getattr(agent, "_fallback_provider_name", None),
         })
 
     return {"sessions": result}
@@ -228,3 +230,110 @@ async def set_model(agent_id: str, request: Request):
     })
 
     return {"status": "ok", "agent_id": agent_id, "old_model": old_model, "model": model}
+
+
+ALLOWED_PROVIDERS = {"claude-cli", "claude-api", "openai", "gemini"}
+
+
+@router.post("/sessions/{agent_id}/provider")
+async def set_provider(agent_id: str, request: Request):
+    """Change the AI provider used by an agent. Takes effect on next invocation.
+
+    Body: {"provider": "openai", "fallback_provider": "claude-cli"}
+    """
+    from core.providers.factory import create_provider, FallbackProvider, VALID_PROVIDERS
+    import os
+
+    registry = request.app.state.registry
+    broker = request.app.state.broker
+
+    agent = registry.get(agent_id)
+    if not agent:
+        return JSONResponse(
+            {"error": f"No agent found with id '{agent_id}'"}, status_code=404
+        )
+
+    body = await request.json()
+    provider_name = body.get("provider", "").strip().lower()
+    fallback_name = body.get("fallback_provider", "").strip().lower() or None
+
+    if provider_name not in ALLOWED_PROVIDERS:
+        return JSONResponse(
+            {"error": f"Invalid provider '{provider_name}'. Allowed: {', '.join(sorted(ALLOWED_PROVIDERS))}"},
+            status_code=400,
+        )
+
+    if fallback_name and fallback_name not in ALLOWED_PROVIDERS:
+        return JSONResponse(
+            {"error": f"Invalid fallback provider '{fallback_name}'. Allowed: {', '.join(sorted(ALLOWED_PROVIDERS))}"},
+            status_code=400,
+        )
+
+    config_provider = request.app.state.config_provider
+    project_id = request.app.state.project_id
+
+    # Resolve API keys
+    key_map = {
+        "claude-api": "ANTHROPIC_API_KEY",
+        "openai": "OPENAI_API_KEY",
+        "gemini": "GOOGLE_API_KEY",
+    }
+
+    def _get_key(prov):
+        env_key = key_map.get(prov)
+        if not env_key:
+            return None
+        db_val = config_provider.get(env_key, "")
+        return db_val or os.environ.get(env_key, "")
+
+    try:
+        # Get or create provider_history_repo
+        provider_history_repo = getattr(request.app.state, "provider_history_repo", None)
+
+        primary = create_provider(
+            provider_name,
+            api_key=_get_key(provider_name),
+            history_repo=provider_history_repo,
+            project_id=project_id,
+            agent_id=agent_id,
+            subprocess_mgr=getattr(agent, "_subprocess", None) if provider_name == "claude-cli" else None,
+        )
+
+        if fallback_name:
+            fallback = create_provider(
+                fallback_name,
+                api_key=_get_key(fallback_name),
+                history_repo=provider_history_repo,
+                project_id=project_id,
+                agent_id=agent_id,
+                subprocess_mgr=getattr(agent, "_subprocess", None) if fallback_name == "claude-cli" else None,
+            )
+            agent.set_provider(FallbackProvider(primary, fallback))
+        else:
+            agent.set_provider(primary)
+
+        # Update agent metadata
+        agent._provider_name = provider_name
+        agent._fallback_provider_name = fallback_name
+
+    except Exception as e:
+        return JSONResponse(
+            {"error": f"Failed to create provider: {e}"},
+            status_code=500,
+        )
+
+    await broker.broadcast_event({
+        "event_type": "session_status",
+        "data": {
+            "agent_id": agent_id,
+            "provider": provider_name,
+            "fallback_provider": fallback_name,
+        },
+    })
+
+    return {
+        "status": "ok",
+        "agent_id": agent_id,
+        "provider": provider_name,
+        "fallback_provider": fallback_name,
+    }

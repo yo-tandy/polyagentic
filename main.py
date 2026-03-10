@@ -54,6 +54,8 @@ from db.repositories.conversation_repo import ConversationRepository
 from db.repositories.message_repo import MessageRepository
 from db.repositories.team_structure_repo import TeamStructureRepository
 from db.repositories.role_repo import RoleRepository
+from db.repositories.provider_history_repo import ProviderHistoryRepository
+from core.providers.factory import create_provider, FallbackProvider
 
 logging.basicConfig(
     level=logging.INFO,
@@ -151,6 +153,7 @@ class ProjectLifecycleManager:
         memory_repo = MemoryRepository(self._sf)
         conv_repo = ConversationRepository(self._sf)
         message_repo = MessageRepository(self._sf)
+        provider_history_repo = ProviderHistoryRepository(self._sf)
 
         # ── Create DB-backed stores ──
         session_store = SessionStore(session_repo, project_id)
@@ -269,6 +272,10 @@ class ProjectLifecycleManager:
 
             role_def = roles.get(agent_def.role_id)
             if role_def:
+                # Resolve provider: team_structure override > role default
+                agent_provider = getattr(agent_def, "provider", None) or role_def.provider or "claude-cli"
+                agent_fallback = getattr(agent_def, "fallback_provider", None) or role_def.fallback_provider
+
                 # Role-based instantiation (new path)
                 agent = create_role_agent(
                     agent_id=agent_id,
@@ -280,6 +287,8 @@ class ProjectLifecycleManager:
                     prompt_append=agent_def.prompt_append or "",
                     allowed_actions_override=agent_def.allowed_actions,
                     description=agent_def.description,
+                    provider_name=agent_provider,
+                    fallback_provider_name=agent_fallback,
                 )
                 # Inject deps from role definition
                 for dep_name in role_def.deps:
@@ -326,6 +335,59 @@ class ProjectLifecycleManager:
                     working_dir=workspace_path,
                 )
             registry.register(agent)
+
+        # ── Wire AI providers per agent ──
+        # Resolve API keys: DB config first, then env vars
+        def _get_api_key(provider_name: str) -> str | None:
+            key_map = {
+                "claude-api": "ANTHROPIC_API_KEY",
+                "openai": "OPENAI_API_KEY",
+                "gemini": "GOOGLE_API_KEY",
+            }
+            env_key = key_map.get(provider_name)
+            if not env_key:
+                return None
+            # Check DB config first
+            db_val = self._config.get(env_key, "")
+            if db_val:
+                return db_val
+            return os.environ.get(env_key, "")
+
+        for agent in registry.get_all():
+            prov_name = getattr(agent, "_provider_name", "claude-cli")
+            fb_name = getattr(agent, "_fallback_provider_name", None)
+
+            if prov_name != "claude-cli":
+                try:
+                    primary = create_provider(
+                        prov_name,
+                        api_key=_get_api_key(prov_name),
+                        history_repo=provider_history_repo,
+                        project_id=project_id,
+                        agent_id=agent.agent_id,
+                    )
+                    if fb_name:
+                        fallback = create_provider(
+                            fb_name,
+                            api_key=_get_api_key(fb_name),
+                            history_repo=provider_history_repo,
+                            project_id=project_id,
+                            agent_id=agent.agent_id,
+                            subprocess_mgr=agent._subprocess if fb_name == "claude-cli" else None,
+                        )
+                        agent.set_provider(FallbackProvider(primary, fallback))
+                    else:
+                        agent.set_provider(primary)
+                    logger.info(
+                        "Agent '%s' using provider '%s'%s",
+                        agent.agent_id, prov_name,
+                        f" (fallback: {fb_name})" if fb_name else "",
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Failed to create provider '%s' for agent '%s': %s — keeping claude-cli",
+                        prov_name, agent.agent_id, e,
+                    )
 
         # Configure all agents
         for agent in registry.get_all():
@@ -441,6 +503,7 @@ class ProjectLifecycleManager:
             "project_id": project_id,
             "config_provider": self._config,
             "role_repo": role_repo,
+            "provider_history_repo": provider_history_repo,
         }
 
 

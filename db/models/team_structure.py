@@ -28,6 +28,8 @@ class TeamAgentDef(Base, TimestampMixin, TenantMixin):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     prompt_append: Mapped[str] = mapped_column(Text, default="")  # project-specific prompt additions
     allowed_actions: Mapped[list | None] = mapped_column(JSON, nullable=True)  # null = use role default
+    provider: Mapped[str] = mapped_column(String(20), default="claude-cli")
+    fallback_provider: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
 
 class TeamStructureMeta(Base, TenantMixin):

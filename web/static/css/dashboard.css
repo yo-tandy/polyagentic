@@ -2247,7 +2247,8 @@
     gap: 4px;
 }
 
-.session-model-select {
+.session-model-select,
+.session-provider-select {
     background: var(--surface);
     color: var(--text-primary);
     border: 1px solid var(--border);
@@ -2257,8 +2258,10 @@
     font-family: inherit;
     cursor: pointer;
 }
-.session-model-select:hover { border-color: var(--accent); }
-.session-model-select:focus { outline: none; border-color: var(--accent); }
+.session-model-select:hover,
+.session-provider-select:hover { border-color: var(--accent); }
+.session-model-select:focus,
+.session-provider-select:focus { outline: none; border-color: var(--accent); }
 
 .session-card__actions {
     display: flex;

@@ -30,6 +30,8 @@ class RoleDefinition:
     max_budget_usd: float | None = None
     deps: list[str] = field(default_factory=list)
     allowed_actions: list[str] = field(default_factory=list)
+    provider: str = "claude-cli"
+    fallback_provider: str | None = None
 
 
 # ── Universal actions available to every role ───────────────────────
@@ -245,4 +247,6 @@ class RoleRepository(BaseRepository):
             max_budget_usd=row.max_budget_usd,
             deps=row.deps or [],
             allowed_actions=row.allowed_actions or [],
+            provider=row.provider or "claude-cli",
+            fallback_provider=row.fallback_provider,
         )

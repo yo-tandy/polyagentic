@@ -140,6 +140,7 @@ const ProjectInfo = {
                         <tr>
                             <th>Agent</th>
                             <th>Role</th>
+                            <th>Provider</th>
                             <th>Model</th>
                             <th>Requests</th>
                             <th>Errors</th>
@@ -153,6 +154,7 @@ const ProjectInfo = {
                         <tr>
                             <td><strong>${this._esc(a.name)}</strong> <span class="project-info__agent-id">${this._esc(a.id)}</span></td>
                             <td>${this._esc(a.role)}</td>
+                            <td>${this._esc(a.provider || 'claude-cli')}</td>
                             <td>${this._esc(a.model)}</td>
                             <td>${a.request_count}</td>
                             <td>${a.error_count || 0}</td>

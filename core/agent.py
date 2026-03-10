@@ -11,6 +11,8 @@ from typing import Any, TYPE_CHECKING
 
 from core.message import Message, MessageType
 from core.subprocess_manager import SubprocessManager, DockerSubprocessManager
+from core.providers.base import BaseProvider
+from core.providers.claude_cli_provider import ClaudeCLIProvider
 from core.session_store import SessionStore
 from config import DEFAULT_MODEL, CLAUDE_ALLOWED_TOOLS_DEV
 
@@ -102,6 +104,8 @@ class Agent:
             self._subprocess = DockerSubprocessManager(container_name)
         else:
             self._subprocess = SubprocessManager()
+        # Provider wraps _subprocess by default; can be swapped via set_provider()
+        self._provider: BaseProvider = ClaudeCLIProvider(self._subprocess)
         self._session_store: SessionStore | None = None
         self._broker: MessageBroker | None = None
         self._task_board: TaskBoard | None = None
@@ -141,6 +145,10 @@ class Agent:
         self._conversation_manager = conversation_manager
         self._action_registry = action_registry
         self._phase_board = phase_board
+
+    def set_provider(self, provider: BaseProvider) -> None:
+        """Swap the AI model provider (e.g. Claude CLI → OpenAI API)."""
+        self._provider = provider
 
     async def start(self):
         self.inbox_dir.mkdir(parents=True, exist_ok=True)
@@ -398,7 +406,7 @@ class Agent:
             "Each step should be one clear action. Do not start working — only plan."
         )
         try:
-            plan_result = await self._subprocess.invoke(
+            plan_result = await self._provider.invoke(
                 prompt=plan_prompt,
                 model=self.model,
                 allowed_tools="",   # text-only, no tools
@@ -441,7 +449,7 @@ class Agent:
         if self.use_session and self._session_store:
             session_id = self._session_store.get(self.agent_id)
 
-        result = await self._subprocess.invoke(
+        result = await self._provider.invoke(
             prompt=prompt,
             system_prompt=system_prompt,
             model=self.model,
@@ -460,7 +468,7 @@ class Agent:
             )
             if self._session_store:
                 await self._session_store.set(self.agent_id, "")
-            result = await self._subprocess.invoke(
+            result = await self._provider.invoke(
                 prompt=prompt,
                 system_prompt=await self._get_system_prompt_if_first_call(),
                 model=self.model,
@@ -554,7 +562,7 @@ class Agent:
         )
 
         session_id = self._session_store.get(self.agent_id) if self._session_store else None
-        retry = await self._subprocess.invoke(
+        retry = await self._provider.invoke(
             prompt=correction,
             system_prompt=self._get_session_reminder(),
             model=self.model,

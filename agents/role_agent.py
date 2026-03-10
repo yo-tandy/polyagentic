@@ -38,6 +38,8 @@ def create_role_agent(
     prompt_append: str = "",
     allowed_actions_override: list[str] | None = None,
     description: str = "",
+    provider_name: str | None = None,
+    fallback_provider_name: str | None = None,
 ) -> Agent:
     """Create an Agent instance from a role definition.
 
@@ -51,6 +53,8 @@ def create_role_agent(
         prompt_append: Project-specific text appended to role prompt.
         allowed_actions_override: Override role's default action list.
         description: Human-readable description of this instance.
+        provider_name: AI provider name (e.g. "claude-cli", "openai").
+        fallback_provider_name: Fallback provider if primary fails.
 
     Returns:
         A fully configured Agent ready for ``configure()`` and ``start()``.
@@ -86,6 +90,10 @@ def create_role_agent(
     # Store template for re-rendering
     agent._prompt_template = prompt_template
     agent.max_task_context_items = role_def.max_task_context_items
+
+    # Store provider configuration for wiring in main.py
+    agent._provider_name = provider_name or getattr(role_def, "provider", "claude-cli") or "claude-cli"
+    agent._fallback_provider_name = fallback_provider_name or getattr(role_def, "fallback_provider", None)
 
     logger.debug(
         "Created agent '%s' (%s) from role '%s' — tools=%s, session=%s, stateless=%s, actions=%d",

@@ -65,6 +65,11 @@ async def init_db(url: str | None = None) -> None:
             "ALTER TABLE documents ADD COLUMN file_size INTEGER",
             "ALTER TABLE tasks ADD COLUMN category VARCHAR(20) DEFAULT 'operational'",
             "ALTER TABLE tasks ADD COLUMN phase_id VARCHAR(20) REFERENCES phases(id)",
+            # Provider support (Phase 7)
+            "ALTER TABLE agent_roles ADD COLUMN provider VARCHAR(20) DEFAULT 'claude-cli'",
+            "ALTER TABLE agent_roles ADD COLUMN fallback_provider VARCHAR(20)",
+            "ALTER TABLE team_agent_defs ADD COLUMN provider VARCHAR(20) DEFAULT 'claude-cli'",
+            "ALTER TABLE team_agent_defs ADD COLUMN fallback_provider VARCHAR(20)",
         ]:
             try:
                 await conn.execute(text(stmt))

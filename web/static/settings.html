@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Polyagentic — Settings</title>
+    <link rel="stylesheet" href="/static/css/settings.css?v=1">
+</head>
+<body>
+    <header class="settings-header">
+        <div class="settings-header__left">
+            <a href="/" class="settings-header__back">&larr; Dashboard</a>
+            <span class="settings-header__title">SETTINGS</span>
+        </div>
+        <div class="settings-header__user" id="header-user">
+            <img class="settings-header__avatar" id="header-avatar" src="" alt="" style="display:none">
+            <span id="header-user-name"></span>
+        </div>
+    </header>
+
+    <div class="settings-layout">
+        <nav class="settings-tabs">
+            <button class="settings-tab active" data-tab="org">Organization</button>
+            <button class="settings-tab" data-tab="profile">User Profile</button>
+        </nav>
+
+        <div class="settings-content">
+            <!-- Organization Tab -->
+            <div class="settings-panel active" id="panel-org">
+                <!-- Org Name -->
+                <div class="settings-section">
+                    <div class="settings-section__title">Organization</div>
+                    <div class="settings-field">
+                        <label class="settings-field__label">Organization Name</label>
+                        <div class="settings-field__row">
+                            <input type="text" class="settings-field__input" id="org-name"
+                                   placeholder="Organization name" maxlength="200">
+                            <button class="settings-btn settings-btn--primary" id="save-org-name">Save</button>
+                        </div>
+                        <div class="settings-status" id="org-name-status"></div>
+                    </div>
+                </div>
+
+                <!-- API Keys -->
+                <div class="settings-section">
+                    <div class="settings-section__title">API Keys</div>
+                    <div class="settings-field">
+                        <label class="settings-field__label">Anthropic API Key</label>
+                        <div class="settings-field__row">
+                            <input type="password" class="settings-field__input" id="key-anthropic"
+                                   placeholder="sk-ant-..." autocomplete="off">
+                            <button class="settings-btn settings-btn--primary settings-btn--small"
+                                    data-key="ANTHROPIC_API_KEY" data-input="key-anthropic">Save</button>
+                        </div>
+                    </div>
+                    <div class="settings-field">
+                        <label class="settings-field__label">OpenAI API Key</label>
+                        <div class="settings-field__row">
+                            <input type="password" class="settings-field__input" id="key-openai"
+                                   placeholder="sk-..." autocomplete="off">
+                            <button class="settings-btn settings-btn--primary settings-btn--small"
+                                    data-key="OPENAI_API_KEY" data-input="key-openai">Save</button>
+                        </div>
+                    </div>
+                    <div class="settings-field">
+                        <label class="settings-field__label">Google (Gemini) API Key</label>
+                        <div class="settings-field__row">
+                            <input type="password" class="settings-field__input" id="key-google"
+                                   placeholder="AIza..." autocomplete="off">
+                            <button class="settings-btn settings-btn--primary settings-btn--small"
+                                    data-key="GOOGLE_API_KEY" data-input="key-google">Save</button>
+                        </div>
+                    </div>
+                    <div class="settings-status" id="api-key-status"></div>
+                </div>
+
+                <!-- Members -->
+                <div class="settings-section">
+                    <div class="settings-section__title">Members</div>
+                    <div id="members-container">
+                        <div class="settings-empty">Loading members...</div>
+                    </div>
+                </div>
+
+                <!-- Invite Links -->
+                <div class="settings-section">
+                    <div class="settings-section__title">Invite Links</div>
+                    <div id="invites-container">
+                        <div class="settings-empty">Loading invites...</div>
+                    </div>
+                    <div style="margin-top: 12px;">
+                        <button class="settings-btn settings-btn--secondary" id="create-invite-btn">
+                            + Create Invite Link
+                        </button>
+                    </div>
+                    <div class="settings-status" id="invite-status"></div>
+                </div>
+            </div>
+
+            <!-- User Profile Tab -->
+            <div class="settings-panel" id="panel-profile">
+                <div class="settings-section">
+                    <div class="settings-section__title">Your Profile</div>
+                    <div class="settings-field">
+                        <label class="settings-field__label">Name</label>
+                        <input type="text" class="settings-field__input settings-field__input--readonly"
+                               id="profile-name" readonly>
+                    </div>
+                    <div class="settings-field">
+                        <label class="settings-field__label">Email</label>
+                        <input type="text" class="settings-field__input settings-field__input--readonly"
+                               id="profile-email" readonly>
+                    </div>
+                    <div class="settings-field">
+                        <label class="settings-field__label">Organization</label>
+                        <input type="text" class="settings-field__input settings-field__input--readonly"
+                               id="profile-org" readonly>
+                    </div>
+                </div>
+                <div class="settings-section">
+                    <div class="settings-section__title">Preferences</div>
+                    <div class="settings-empty">More settings coming soon</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/settings.js?v=2"></script>
+</body>
+</html>

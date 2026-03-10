@@ -64,6 +64,16 @@ DEFAULT_CONFIG_SEEDS: list[dict] = [
     {"scope": "system", "key": "GOOGLE_API_KEY", "value": "",
      "value_type": "string", "description": "Google API key (for Gemini provider)"},
 
+    # ── Auth / SSO ───────────────────────────────────────────────
+    {"scope": "system", "key": "GOOGLE_CLIENT_ID", "value": "",
+     "value_type": "string", "description": "Google OAuth 2.0 Client ID"},
+    {"scope": "system", "key": "GOOGLE_CLIENT_SECRET", "value": "",
+     "value_type": "string", "description": "Google OAuth 2.0 Client Secret"},
+    {"scope": "system", "key": "JWT_SECRET", "value": "",
+     "value_type": "string", "description": "Secret key for JWT signing (auto-generated if empty)"},
+    {"scope": "system", "key": "AUTH_ENABLED", "value": "false",
+     "value_type": "bool", "description": "Enable authentication (requires Google OAuth config)"},
+
     # ── Agent scope ───────────────────────────────────────────────
     # Manny
     {"scope": "agent", "scope_id": "manny", "key": "timeout",

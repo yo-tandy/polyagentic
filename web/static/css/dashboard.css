@@ -1833,6 +1833,43 @@
     border-color: var(--accent-muted);
 }
 
+.header__btn--settings {
+    text-decoration: none;
+    color: var(--text);
+}
+
+.header__btn--logout {
+    color: var(--text-dim);
+    font-size: 10px;
+}
+
+/* Header user info */
+.header__user {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: 8px;
+    padding-left: 12px;
+    border-left: 1px solid var(--border);
+}
+
+.header__user-avatar {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    object-fit: cover;
+}
+
+.header__user-name {
+    font-size: 11px;
+    color: var(--text);
+    font-weight: 500;
+    max-width: 120px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 /* Modal */
 .modal-overlay {
     display: none;

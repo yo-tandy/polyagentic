@@ -13,18 +13,22 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _get_user(request: Request) -> dict:
+    return getattr(request.state, "user", {})
+
+
 # ── Document models ──
 
 class AddDocumentRequest(BaseModel):
     title: str
     category: str
     content: str
-    created_by: str = "user"
+    created_by: str | None = None  # Populated from auth context
 
 
 class UpdateDocumentRequest(BaseModel):
     content: str
-    updated_by: str = "user"
+    updated_by: str | None = None  # Populated from auth context
 
 
 # ── Comment models ──
@@ -34,7 +38,7 @@ class AddCommentRequest(BaseModel):
     element_index: int
     comment_text: str
     assigned_to: str
-    created_by: str = "user"
+    created_by: str | None = None  # Populated from auth context
 
 
 class UpdateCommentRequest(BaseModel):
@@ -58,10 +62,12 @@ async def add_document(body: AddDocumentRequest, request: Request):
     kb = request.app.state.knowledge_base
     if not kb:
         return JSONResponse({"error": "Knowledge base not available"}, status_code=503)
+    user = _get_user(request)
+    created_by = body.created_by or user.get("id", "user")
     try:
         doc = await kb.add_document(
             title=body.title, category=body.category,
-            content=body.content, created_by=body.created_by,
+            content=body.content, created_by=created_by,
         )
         return {"status": "created", "document": doc}
     except ValueError as e:
@@ -86,7 +92,9 @@ async def update_document(doc_id: str, body: UpdateDocumentRequest, request: Req
     kb = request.app.state.knowledge_base
     if not kb:
         return JSONResponse({"error": "Knowledge base not available"}, status_code=503)
-    doc = await kb.update_document(doc_id, body.content, body.updated_by)
+    user = _get_user(request)
+    updated_by = body.updated_by or user.get("id", "user")
+    doc = await kb.update_document(doc_id, body.content, updated_by)
     if not doc:
         return JSONResponse({"error": "Document not found"}, status_code=404)
     return {"status": "updated", "document": doc}
@@ -119,13 +127,15 @@ async def add_comment(doc_id: str, body: AddCommentRequest, request: Request):
     kb = request.app.state.knowledge_base
     if not kb:
         return JSONResponse({"error": "Knowledge base not available"}, status_code=503)
+    user = _get_user(request)
+    created_by = body.created_by or user.get("id", "user")
     comment = await kb.add_comment(
         doc_id=doc_id,
         highlighted_text=body.highlighted_text,
         element_index=body.element_index,
         comment_text=body.comment_text,
         assigned_to=body.assigned_to,
-        created_by=body.created_by,
+        created_by=created_by,
     )
     if not comment:
         return JSONResponse({"error": "Document not found"}, status_code=404)
@@ -187,6 +197,9 @@ async def dispatch_comments(doc_id: str, request: Request):
     for c in open_comments:
         by_agent.setdefault(c["assigned_to"], []).append(c)
 
+    user = _get_user(request)
+    user_id = user.get("id", "user")
+
     tasks_created = []
     for agent_id, agent_comments in by_agent.items():
         comment_list = "\n".join(
@@ -232,7 +245,7 @@ async def dispatch_comments(doc_id: str, request: Request):
         task = await task_board.create_task(
             title=f"Review comments on: {doc['title']}",
             description=description,
-            created_by="user",
+            created_by=user_id,
             assignee=agent_id,
             priority=2,
             labels=["comments", "review"],
@@ -240,7 +253,7 @@ async def dispatch_comments(doc_id: str, request: Request):
         tasks_created.append(task.id)
 
         msg = Message(
-            sender="user",
+            sender=user_id,
             recipient=agent_id,
             type=MessageType.TASK,
             content=description,

@@ -1,0 +1,328 @@
+/* Settings page styles — matches dashboard dark theme */
+
+:root {
+    --bg: #0d0f17;
+    --surface: #1a1d27;
+    --surface-light: #242836;
+    --border: #2e3245;
+    --text-primary: #e1e2e5;
+    --text-secondary: #8b8d98;
+    --accent: #7c5bf5;
+    --accent-hover: #9178f8;
+    --accent-muted: rgba(124, 91, 245, 0.25);
+    --danger: #e5484d;
+    --success: #30a46c;
+    --font-mono: 'SF Mono', 'Fira Code', 'Cascadia Code', Menlo, monospace;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+    background: var(--bg);
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    min-height: 100vh;
+}
+
+/* Header */
+.settings-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 24px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+}
+
+.settings-header__left {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+
+.settings-header__back {
+    color: var(--text-secondary);
+    text-decoration: none;
+    font-size: 12px;
+    padding: 4px 10px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    transition: all 0.2s;
+}
+.settings-header__back:hover {
+    color: var(--text-primary);
+    border-color: var(--accent);
+}
+
+.settings-header__title {
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    color: var(--accent);
+}
+
+.settings-header__user {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+
+.settings-header__avatar {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    object-fit: cover;
+}
+
+/* Layout */
+.settings-layout {
+    display: flex;
+    max-width: 900px;
+    margin: 24px auto;
+    gap: 24px;
+    padding: 0 24px;
+}
+
+/* Tabs sidebar */
+.settings-tabs {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 180px;
+}
+
+.settings-tab {
+    background: none;
+    border: 1px solid transparent;
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    padding: 10px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    text-align: left;
+    transition: all 0.15s;
+}
+.settings-tab:hover {
+    background: var(--surface);
+    color: var(--text-primary);
+}
+.settings-tab.active {
+    background: var(--surface);
+    border-color: var(--border);
+    color: var(--accent);
+    font-weight: 600;
+}
+
+/* Content area */
+.settings-content {
+    flex: 1;
+    min-width: 0;
+}
+
+.settings-panel {
+    display: none;
+}
+.settings-panel.active {
+    display: block;
+}
+
+.settings-section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 24px;
+    margin-bottom: 20px;
+}
+
+.settings-section__title {
+    font-size: 13px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text-primary);
+    margin-bottom: 16px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+}
+
+/* Form elements */
+.settings-field {
+    margin-bottom: 16px;
+}
+.settings-field:last-child {
+    margin-bottom: 0;
+}
+
+.settings-field__label {
+    display: block;
+    font-size: 11px;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 6px;
+}
+
+.settings-field__input {
+    width: 100%;
+    background: var(--bg);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 8px 12px;
+    font-size: 12px;
+    font-family: var(--font-mono);
+}
+.settings-field__input:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+.settings-field__input::placeholder {
+    color: var(--text-secondary);
+    opacity: 0.6;
+}
+.settings-field__input--readonly {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.settings-field__row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+.settings-field__row .settings-field__input {
+    flex: 1;
+}
+
+/* Buttons */
+.settings-btn {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 600;
+    padding: 6px 14px;
+    border-radius: 4px;
+    cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    transition: all 0.15s;
+    border: none;
+}
+
+.settings-btn--primary {
+    background: var(--accent);
+    color: #fff;
+}
+.settings-btn--primary:hover {
+    background: var(--accent-hover);
+}
+
+.settings-btn--secondary {
+    background: var(--surface-light);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+}
+.settings-btn--secondary:hover {
+    border-color: var(--accent);
+}
+
+.settings-btn--danger {
+    background: transparent;
+    color: var(--danger);
+    border: 1px solid var(--danger);
+}
+.settings-btn--danger:hover {
+    background: rgba(229, 72, 77, 0.1);
+}
+
+.settings-btn--small {
+    font-size: 10px;
+    padding: 4px 10px;
+}
+
+/* Status message */
+.settings-status {
+    font-size: 11px;
+    padding: 6px 10px;
+    border-radius: 4px;
+    margin-top: 8px;
+    display: none;
+}
+.settings-status.success {
+    display: block;
+    color: var(--success);
+    background: rgba(48, 164, 108, 0.1);
+}
+.settings-status.error {
+    display: block;
+    color: var(--danger);
+    background: rgba(229, 72, 77, 0.1);
+}
+
+/* Members table */
+.members-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+.members-table th {
+    text-align: left;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-secondary);
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+}
+.members-table td {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-primary);
+}
+.members-table tr:last-child td {
+    border-bottom: none;
+}
+
+/* Invite list */
+.invite-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 12px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    margin-bottom: 8px;
+    font-size: 11px;
+}
+.invite-item__token {
+    font-family: var(--font-mono);
+    color: var(--accent);
+    cursor: pointer;
+}
+.invite-item__meta {
+    color: var(--text-secondary);
+    font-size: 10px;
+}
+.invite-item__actions {
+    display: flex;
+    gap: 6px;
+}
+
+/* Empty state */
+.settings-empty {
+    color: var(--text-secondary);
+    font-size: 12px;
+    text-align: center;
+    padding: 20px;
+    font-style: italic;
+}
+
+/* API key mask */
+.api-key-display {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text-secondary);
+}

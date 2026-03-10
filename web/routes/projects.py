@@ -11,6 +11,10 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _get_user(request: Request) -> dict:
+    return getattr(request.state, "user", {})
+
+
 class CreateProjectRequest(BaseModel):
     name: str
     description: str = ""
@@ -32,8 +36,11 @@ async def create_project(body: CreateProjectRequest, request: Request):
     project_store = request.app.state.project_store
     if not project_store:
         return JSONResponse({"error": "Project store not available"}, status_code=503)
+    user = _get_user(request)
     try:
         project = await project_store.create_project(body.name, body.description)
+        # Track the creating user
+        project["created_by"] = user.get("id", "user")
         return {"status": "created", "project": project}
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)

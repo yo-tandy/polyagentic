@@ -3,6 +3,10 @@
 async function safeFetch(url, fallback = {}) {
     try {
         const res = await fetch(url);
+        if (res.status === 401) {
+            window.location.href = '/auth/login';
+            return fallback;
+        }
         if (!res.ok) {
             console.warn(`${url} returned ${res.status}`);
             return fallback;
@@ -17,6 +21,7 @@ async function safeFetch(url, fallback = {}) {
 const App = {
     ws: null,
     reconnectDelay: 1000,
+    currentUser: null,
 
     async init() {
         ProjectSelector.init();
@@ -32,9 +37,37 @@ const App = {
         ConversationWindow.init();
         ProjectInfo.init();
 
+        await this.loadUserInfo();
         await this.loadInitialState();
         this.connectWebSocket();
         this.startPolling();
+    },
+
+    async loadUserInfo() {
+        const raw = await safeFetch('/auth/me', null);
+        const res = raw?.user || raw;
+        if (res && res.id) {
+            this.currentUser = res;
+            const userEl = document.getElementById('header-user');
+            const nameEl = document.getElementById('header-user-name');
+            const avatarEl = document.getElementById('header-user-avatar');
+            if (userEl) userEl.style.display = 'flex';
+            if (nameEl) nameEl.textContent = res.name || res.email || '';
+            if (avatarEl && res.picture_url) {
+                avatarEl.src = res.picture_url;
+                avatarEl.style.display = 'inline-block';
+            } else if (avatarEl) {
+                avatarEl.style.display = 'none';
+            }
+            // Logout handler
+            const logoutBtn = document.getElementById('logout-btn');
+            if (logoutBtn) {
+                logoutBtn.addEventListener('click', async () => {
+                    await fetch('/auth/logout', { method: 'POST' });
+                    window.location.href = '/auth/login';
+                });
+            }
+        }
     },
 
     async loadInitialState() {
@@ -66,8 +99,8 @@ const App = {
 
         // Restore chat history (split main vs conversation messages)
         for (const msg of (chatRes.messages || [])) {
-            const type = msg.sender === 'user' ? 'user' : 'agent';
-            const name = msg.sender === 'user' ? 'You' : (msg.sender || 'Agent');
+            const type = msg.sender_type === 'human' ? 'user' : 'agent';
+            const name = msg.sender_type === 'human' ? (msg.sender_name || 'You') : (msg.sender_name || msg.sender || 'Agent');
             if (msg.conversation_id && activeConvIds.has(msg.conversation_id)) {
                 ConversationWindow.addMessage(name, msg.content, type, {
                     ...msg.metadata,

@@ -70,12 +70,23 @@ async def init_db(url: str | None = None) -> None:
             "ALTER TABLE agent_roles ADD COLUMN fallback_provider VARCHAR(20)",
             "ALTER TABLE team_agent_defs ADD COLUMN provider VARCHAR(20) DEFAULT 'claude-cli'",
             "ALTER TABLE team_agent_defs ADD COLUMN fallback_provider VARCHAR(20)",
+            # User attribution (Phase 5)
+            "ALTER TABLE message_log ADD COLUMN user_id VARCHAR(64)",
         ]:
             try:
                 await conn.execute(text(stmt))
                 logger.info("Migration applied: %s", stmt)
             except Exception:
                 pass  # Column already exists
+
+    # Seed default organization (existing data uses tenant_id='default')
+    async with _session_factory() as session:
+        from db.models.organization import Organization
+        org = await session.get(Organization, "default")
+        if not org:
+            session.add(Organization(id="default", name="Default Organization"))
+            await session.commit()
+            logger.info("Seeded default organization")
 
     logger.info("Database tables created/verified")
 

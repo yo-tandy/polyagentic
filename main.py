@@ -55,6 +55,9 @@ from db.repositories.message_repo import MessageRepository
 from db.repositories.team_structure_repo import TeamStructureRepository
 from db.repositories.role_repo import RoleRepository
 from db.repositories.provider_history_repo import ProviderHistoryRepository
+from db.repositories.user_repo import UserRepository
+from db.repositories.org_repo import OrgRepository
+from db.repositories.invite_repo import InviteRepository
 from core.providers.factory import create_provider, FallbackProvider
 
 logging.basicConfig(
@@ -154,6 +157,12 @@ class ProjectLifecycleManager:
         conv_repo = ConversationRepository(self._sf)
         message_repo = MessageRepository(self._sf)
         provider_history_repo = ProviderHistoryRepository(self._sf)
+        user_repo = UserRepository(self._sf)
+        org_repo = OrgRepository(self._sf)
+        invite_repo = InviteRepository(self._sf)
+
+        # Ensure default org exists
+        await org_repo.ensure_default()
 
         # ── Create DB-backed stores ──
         session_store = SessionStore(session_repo, project_id)
@@ -504,6 +513,9 @@ class ProjectLifecycleManager:
             "config_provider": self._config,
             "role_repo": role_repo,
             "provider_history_repo": provider_history_repo,
+            "user_repo": user_repo,
+            "org_repo": org_repo,
+            "invite_repo": invite_repo,
         }
 
 

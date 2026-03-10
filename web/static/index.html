@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Polyagentic Dashboard</title>
     <link rel="stylesheet" href="/static/css/main.css?v=2">
-    <link rel="stylesheet" href="/static/css/dashboard.css?v=3">
+    <link rel="stylesheet" href="/static/css/dashboard.css?v=4">
 </head>
 <body>
     <header class="header">
@@ -20,6 +20,12 @@
             <button class="header__btn" id="project-info-btn">Project Info</button>
             <button class="header__btn" id="team-config-btn">Team Config</button>
             <span class="header__status" id="connection-status">Connecting...</span>
+            <div class="header__user" id="header-user" style="display:none;">
+                <img class="header__user-avatar" id="header-user-avatar" src="" alt="">
+                <span class="header__user-name" id="header-user-name"></span>
+                <a href="/settings" class="header__btn header__btn--settings">Settings</a>
+                <button class="header__btn header__btn--logout" id="logout-btn">Logout</button>
+            </div>
         </div>
     </header>
 
@@ -234,7 +240,7 @@
     <script src="/static/js/components/projectSelector.js?v=2"></script>
     <script src="/static/js/components/agentPanel.js?v=2"></script>
     <script src="/static/js/components/taskBoard.js?v=2"></script>
-    <script src="/static/js/components/chatView.js?v=2"></script>
+    <script src="/static/js/components/chatView.js?v=3"></script>
     <script src="/static/js/components/activityLog.js?v=2"></script>
     <script src="/static/js/components/gitPanel.js?v=2"></script>
     <script src="/static/js/components/knowledgePanel.js?v=2"></script>
@@ -243,6 +249,6 @@
     <script src="/static/js/components/conversationBar.js?v=2"></script>
     <script src="/static/js/components/conversationWindow.js?v=2"></script>
     <script src="/static/js/components/projectInfo.js?v=2"></script>
-    <script src="/static/js/app.js?v=2"></script>
+    <script src="/static/js/app.js?v=4"></script>
 </body>
 </html>

@@ -18,15 +18,22 @@ class ChatResponse(BaseModel):
     status: str
 
 
+def _get_user(request: Request) -> dict:
+    return getattr(request.state, "user", {})
+
+
 @router.post("/chat", response_model=ChatResponse)
 async def send_chat(body: ChatRequest, request: Request):
     """Send a message to the user-facing agent (main chat)."""
     broker = request.app.state.broker
     ts = getattr(request.app.state, "team_structure", None)
     ufa = ts.user_facing_agent if ts else "manny"
+    user = _get_user(request)
+    user_id = user.get("id", "user")
+    user_name = user.get("name", "User")
 
     msg = Message(
-        sender="user",
+        sender=user_id,
         recipient=ufa,
         type=MessageType.CHAT,
         content=body.message,
@@ -36,7 +43,9 @@ async def send_chat(body: ChatRequest, request: Request):
 
     broker._chat_history.append({
         "message_id": msg.id,
-        "sender": "user",
+        "sender": user_id,
+        "sender_name": user_name,
+        "sender_type": "human",
         "content": body.message,
         "timestamp": msg.timestamp,
         "task_id": None,
@@ -60,9 +69,12 @@ async def send_conversation_message(body: ChatRequest, request: Request):
         return ChatResponse(message_id="", status="no_active_conversation")
 
     broker = request.app.state.broker
+    user = _get_user(request)
+    user_id = user.get("id", "user")
+    user_name = user.get("name", "User")
 
     msg = Message(
-        sender="user",
+        sender=user_id,
         recipient=active_conv["agent_id"],
         type=MessageType.CONVERSATION,
         content=body.message,
@@ -70,11 +82,13 @@ async def send_conversation_message(body: ChatRequest, request: Request):
     )
 
     await broker.deliver(msg)
-    await cm.record_message("user", body.message, conv_id=active_conv["id"])
+    await cm.record_message(user_id, body.message, conv_id=active_conv["id"])
 
     broker._chat_history.append({
         "message_id": msg.id,
-        "sender": "user",
+        "sender": user_id,
+        "sender_name": user_name,
+        "sender_type": "human",
         "content": body.message,
         "timestamp": msg.timestamp,
         "task_id": None,

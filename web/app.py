@@ -7,7 +7,9 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
-from web.routes import chat, agents, tasks, activity, git, config, ws, projects, knowledge, memory, sessions, conversations, github, uploads, phases
+from web.routes import chat, agents, tasks, activity, git, config, ws, projects, knowledge, memory, sessions, conversations, github, uploads, phases, orgs
+from web.auth import auth_router
+from web.middleware import AuthMiddleware
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -37,11 +39,15 @@ def create_app(
         app.state.role_repo = app_state.get("role_repo")
         app.state.provider_history_repo = app_state.get("provider_history_repo")
         app.state.project_id = app_state.get("project_id")
+        app.state.user_repo = app_state.get("user_repo")
+        app.state.org_repo = app_state.get("org_repo")
+        app.state.invite_repo = app_state.get("invite_repo")
         app.state.project_store = project_store
         app.state.lifecycle_manager = lifecycle_manager
         yield
 
     app = FastAPI(title="Polyagentic", lifespan=lifespan)
+    app.add_middleware(AuthMiddleware)
 
     app.include_router(chat.router, prefix="/api")
     app.include_router(agents.router, prefix="/api")
@@ -57,12 +63,18 @@ def create_app(
     app.include_router(github.router, prefix="/api")
     app.include_router(uploads.router, prefix="/api")
     app.include_router(phases.router, prefix="/api")
+    app.include_router(orgs.router, prefix="/api")
     app.include_router(ws.router)
+    app.include_router(auth_router)
 
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
     @app.get("/")
     async def index():
         return FileResponse(str(STATIC_DIR / "index.html"))
+
+    @app.get("/settings")
+    async def settings():
+        return FileResponse(str(STATIC_DIR / "settings.html"))
 
     return app

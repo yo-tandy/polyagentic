@@ -15,3 +15,6 @@ from db.models.config import ConfigEntry  # noqa: F401
 from db.models.team_structure import TeamAgentDef, TeamStructureMeta  # noqa: F401
 from db.models.role import AgentRole  # noqa: F401
 from db.models.provider_history import ProviderMessage  # noqa: F401
+from db.models.organization import Organization  # noqa: F401
+from db.models.user import User  # noqa: F401
+from db.models.invite import InviteLink  # noqa: F401

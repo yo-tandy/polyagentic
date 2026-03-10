@@ -6,6 +6,10 @@ from pydantic import BaseModel
 router = APIRouter()
 
 
+def _get_user(request: Request) -> dict:
+    return getattr(request.state, "user", {})
+
+
 @router.get("/tasks")
 async def get_tasks(
     request: Request,
@@ -47,7 +51,8 @@ async def update_task(task_id: str, body: TaskUpdateRequest, request: Request):
     if task is None:
         return {"error": "Task not found"}
 
-    updates = {"_agent_id": "user"}  # privileged caller
+    user = _get_user(request)
+    updates = {"_agent_id": user.get("id", "user")}  # privileged caller
     if body.status is not None:
         updates["status"] = body.status
     if body.priority is not None:

@@ -26,6 +26,7 @@ class BaseProvider(ABC):
         working_dir: Path | None = None,
         timeout: int = 300,
         max_budget_usd: float | None = None,
+        mcp_config_path: Path | None = None,
     ) -> SubprocessResult:
         """Send a prompt to the model and return the result.
 

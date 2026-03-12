@@ -18,3 +18,5 @@ from db.models.provider_history import ProviderMessage  # noqa: F401
 from db.models.organization import Organization  # noqa: F401
 from db.models.user import User  # noqa: F401
 from db.models.invite import InviteLink  # noqa: F401
+from db.models.mcp_server import MCPServer  # noqa: F401
+from db.models.action_error import ActionError  # noqa: F401

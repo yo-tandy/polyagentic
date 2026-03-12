@@ -99,6 +99,7 @@ DEFAULT_ROLE_SEEDS: list[dict] = [
         "deps": ["git_manager", "project_store"],
         "allowed_actions": UNIVERSAL_ACTIONS + [
             "create_repo", "review_pr", "merge_pr", "request_changes",
+            "request_capability",
         ],
     },
     {
@@ -114,8 +115,11 @@ DEFAULT_ROLE_SEEDS: list[dict] = [
             "registry", "git_manager", "session_store",
             "workspace_path", "messages_dir", "worktrees_dir",
             "container_manager", "project_store", "team_structure",
+            "mcp_manager", "mcp_registry",
         ],
-        "allowed_actions": UNIVERSAL_ACTIONS + ["recruit_agent"],
+        "allowed_actions": UNIVERSAL_ACTIONS + [
+            "recruit_agent", "search_mcp_registry", "deploy_mcp",
+        ],
     },
     {
         "role_id": "engineer",
@@ -127,7 +131,7 @@ DEFAULT_ROLE_SEEDS: list[dict] = [
         "timeout": 300,
         "max_budget_usd": None,
         "deps": [],
-        "allowed_actions": UNIVERSAL_ACTIONS,
+        "allowed_actions": UNIVERSAL_ACTIONS + ["request_capability"],
     },
 ]
 

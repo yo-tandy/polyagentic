@@ -14,6 +14,7 @@ class TaskStatus(str, Enum):
     BLOCKED = "blocked"
     PAUSED = "paused"
     DONE = "done"
+    CANCELLED = "cancelled"
 
 
 @dataclass

@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
-from web.routes import chat, agents, tasks, activity, git, config, ws, projects, knowledge, memory, sessions, conversations, github, uploads, phases, orgs
+from web.routes import chat, agents, tasks, activity, git, config, ws, projects, knowledge, memory, sessions, conversations, github, uploads, phases, orgs, mcp
 from web.auth import auth_router
 from web.middleware import AuthMiddleware
 
@@ -42,6 +42,10 @@ def create_app(
         app.state.user_repo = app_state.get("user_repo")
         app.state.org_repo = app_state.get("org_repo")
         app.state.invite_repo = app_state.get("invite_repo")
+        app.state.mcp_repo = app_state.get("mcp_repo")
+        app.state.mcp_manager = app_state.get("mcp_manager")
+        app.state.mcp_registry = app_state.get("mcp_registry")
+        app.state.action_error_repo = app_state.get("action_error_repo")
         app.state.project_store = project_store
         app.state.lifecycle_manager = lifecycle_manager
         yield
@@ -64,6 +68,7 @@ def create_app(
     app.include_router(uploads.router, prefix="/api")
     app.include_router(phases.router, prefix="/api")
     app.include_router(orgs.router, prefix="/api")
+    app.include_router(mcp.router, prefix="/api")
     app.include_router(ws.router)
     app.include_router(auth_router)
 

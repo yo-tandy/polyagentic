@@ -231,6 +231,24 @@ const App = {
                 // Full reload on project switch
                 location.reload();
                 break;
+
+            case 'mcp_request':
+                ActivityLog.addEntry({
+                    type: 'mcp',
+                    sender: event.data.agent_id,
+                    content: `Requesting capability: ${event.data.capability}`,
+                    timestamp: new Date().toISOString(),
+                });
+                break;
+
+            case 'mcp_installed':
+                ActivityLog.addEntry({
+                    type: 'mcp',
+                    sender: event.data.deployed_by || 'system',
+                    content: `MCP server "${event.data.server_name}" deployed to ${event.data.target_agent}`,
+                    timestamp: new Date().toISOString(),
+                });
+                break;
         }
     },
 

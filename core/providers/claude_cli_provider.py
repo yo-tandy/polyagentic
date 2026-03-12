@@ -28,6 +28,7 @@ class ClaudeCLIProvider(BaseProvider):
         working_dir: Path | None = None,
         timeout: int = 300,
         max_budget_usd: float | None = None,
+        mcp_config_path: Path | None = None,
     ) -> SubprocessResult:
         return await self._subprocess.invoke(
             prompt=prompt,
@@ -38,6 +39,7 @@ class ClaudeCLIProvider(BaseProvider):
             working_dir=working_dir,
             timeout=timeout,
             max_budget_usd=max_budget_usd,
+            mcp_config_path=mcp_config_path,
         )
 
     def supports_resume(self) -> bool:

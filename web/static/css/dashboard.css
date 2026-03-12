@@ -327,6 +327,11 @@
 .task-card__assignee {
     font-size: 10px;
     color: var(--text-muted);
+    margin-left: 6px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
 }
 
 .task-card__age {

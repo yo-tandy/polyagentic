@@ -151,6 +151,14 @@ class TaskBoard:
                 if new_status == TaskStatus.REVIEW and not kwargs.get("reviewer") and not task.reviewer:
                     kwargs["reviewer"] = "jerry"
 
+                # Default outcome when moving to done without one
+                if new_status == TaskStatus.DONE and not kwargs.get("outcome") and not task.outcome:
+                    kwargs["outcome"] = "complete"
+
+                # Clear outcome when re-opening (leaving done)
+                if task.status == TaskStatus.DONE and new_status != TaskStatus.DONE:
+                    kwargs.setdefault("outcome", None)
+
         for key, value in kwargs.items():
             if hasattr(task, key):
                 setattr(task, key, value)

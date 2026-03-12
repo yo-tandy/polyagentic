@@ -10,6 +10,7 @@ from core.message import Message, MessageType
 
 if TYPE_CHECKING:
     from core.agent import Agent
+    from db.repositories.action_error_repo import ActionErrorRepository
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,13 @@ class ActionRegistry:
 
     def __init__(self) -> None:
         self._actions: dict[str, BaseAction] = {}
+        self._action_error_repo: ActionErrorRepository | None = None
+        self._project_id: str | None = None
+
+    def set_error_repo(self, repo: ActionErrorRepository, project_id: str) -> None:
+        """Inject the action error repository for persisting validation failures."""
+        self._action_error_repo = repo
+        self._project_id = project_id
 
     def register(self, action: BaseAction) -> None:
         """Register an action instance."""
@@ -88,6 +96,37 @@ class ActionRegistry:
                 action_name,
             )
             return []
+
+        # ── Field validation ───────────────────────────────────────────
+        errors = action.validate(action_dict)
+        if errors:
+            logger.warning(
+                "ACTION_VALIDATION_FAILED: agent=%s action=%s errors=%s payload=%s",
+                agent.agent_id, action_name, errors, action_dict,
+            )
+            # Persist to DB (fire-and-forget)
+            if self._action_error_repo and self._project_id:
+                try:
+                    await self._action_error_repo.create(
+                        project_id=self._project_id,
+                        agent_id=agent.agent_id,
+                        action_name=action_name,
+                        errors=errors,
+                        payload=action_dict,
+                    )
+                except Exception:
+                    logger.exception("Failed to persist action validation error")
+
+            return [Message(
+                sender="system",
+                recipient=agent.agent_id,
+                type=MessageType.SYSTEM,
+                content=(
+                    f"[Action Validation Error] Your `{action_name}` action failed validation:\n"
+                    + "\n".join(f"- {e}" for e in errors)
+                    + "\n\nPlease fix the issues and re-emit the action."
+                ),
+            )]
 
         # ── Execute ───────────────────────────────────────────────────
         try:

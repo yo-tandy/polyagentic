@@ -95,6 +95,7 @@ class SubprocessManager:
         allowed_tools: str | None,
         session_id: str | None,
         max_budget_usd: float | None,
+        mcp_config_path: Path | None = None,
     ) -> list[str]:
         """Build the Claude CLI argument list (without execution)."""
         cmd = [CLAUDE_CLI, "-p", prompt, "--output-format", "json"]
@@ -113,6 +114,10 @@ class SubprocessManager:
             cmd += ["--max-budget-usd", str(max_budget_usd)]
 
         cmd.append("--dangerously-skip-permissions")
+
+        # MCP server configuration
+        if mcp_config_path:
+            cmd += ["--mcp-config", str(mcp_config_path)]
 
         # Pass system prompt inline (not as a file path) because Claude Code
         # may try to read file paths with its Read tool, which causes hangs
@@ -163,10 +168,12 @@ class SubprocessManager:
         working_dir: Path | None = None,
         timeout: int = 300,
         max_budget_usd: float | None = None,
+        mcp_config_path: Path | None = None,
         _auth_retry: bool = False,
     ) -> SubprocessResult:
         cmd = self._build_claude_args(
             prompt, system_prompt, model, allowed_tools, session_id, max_budget_usd,
+            mcp_config_path=mcp_config_path,
         )
 
         logger.info(
@@ -223,6 +230,7 @@ class SubprocessManager:
                     working_dir=working_dir,
                     timeout=timeout,
                     max_budget_usd=max_budget_usd,
+                    mcp_config_path=mcp_config_path,
                     _auth_retry=True,  # prevent infinite loop
                 )
         # ------------------------------------------------------------------
@@ -249,6 +257,7 @@ class SubprocessManager:
                                 working_dir=working_dir,
                                 timeout=timeout,
                                 max_budget_usd=max_budget_usd,
+                                mcp_config_path=mcp_config_path,
                                 _auth_retry=True,
                             )
                         return parsed

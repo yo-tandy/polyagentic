@@ -23,7 +23,7 @@ class UpdateTask(BaseAction):
         ActionField("status", "string",
                      description="New status",
                      enum=["draft", "pending", "in_progress", "review",
-                           "done", "paused"]),
+                           "done", "paused", "blocked", "cancelled"]),
         ActionField("progress_note", "string",
                      description="Brief status update"),
         ActionField("completion_summary", "string",

@@ -99,6 +99,7 @@ class FallbackProvider(BaseProvider):
         working_dir: Path | None = None,
         timeout: int = 300,
         max_budget_usd: float | None = None,
+        mcp_config_path: Path | None = None,
     ) -> SubprocessResult:
         result = await self._primary.invoke(
             prompt=prompt,
@@ -109,6 +110,7 @@ class FallbackProvider(BaseProvider):
             working_dir=working_dir,
             timeout=timeout,
             max_budget_usd=max_budget_usd,
+            mcp_config_path=mcp_config_path,
         )
 
         if not result.is_error:
@@ -129,6 +131,7 @@ class FallbackProvider(BaseProvider):
             working_dir=working_dir,
             timeout=timeout,
             max_budget_usd=max_budget_usd,
+            mcp_config_path=mcp_config_path,
         )
 
         # Combine cost from both attempts

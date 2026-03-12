@@ -103,6 +103,61 @@ class BaseAction:
             f"Action '{self.name}' has not implemented execute()"
         )
 
+    # ── Validation ─────────────────────────────────────────────────────
+
+    _TYPE_MAP: dict[str, type | tuple[type, ...]] = {
+        "string": str,
+        "integer": (int,),
+        "array": (list,),
+        "boolean": (bool,),
+        "object": (dict,),
+    }
+
+    def validate(self, action_dict: dict) -> list[str]:
+        """Validate *action_dict* against the declared ``fields`` schema.
+
+        Returns a list of error strings (empty = valid).
+        """
+        errors: list[str] = []
+        field_names = {f.name for f in self.fields}
+
+        for f in self.fields:
+            value = action_dict.get(f.name)
+
+            # Required check
+            if f.required and (value is None or value == ""):
+                errors.append(
+                    f"Missing required field `{f.name}` ({f.type}): {f.description}"
+                )
+                continue
+
+            if value is None:
+                continue  # optional and absent — OK
+
+            # Type check
+            expected = self._TYPE_MAP.get(f.type)
+            if expected and not isinstance(value, expected):
+                errors.append(
+                    f"Field `{f.name}` expected {f.type}, got {type(value).__name__}"
+                )
+
+            # Enum check
+            if f.enum and value not in f.enum:
+                errors.append(
+                    f"Field `{f.name}` value '{value}' not in allowed values: {f.enum}"
+                )
+
+        # Warn about unexpected fields (log only, don't reject)
+        known = field_names | {"action"}
+        unexpected = set(action_dict.keys()) - known
+        if unexpected:
+            logger.debug(
+                "Action '%s' received unexpected fields: %s",
+                self.name, unexpected,
+            )
+
+        return errors
+
     # ── Schema / prompt generation ────────────────────────────────────
 
     def get_schema(self) -> dict:

@@ -331,7 +331,7 @@ const TaskBoard = {
                     ${task.role ? `<div><strong>Role:</strong> ${this._escapeHtml(task.role)}</div>` : ''}
                     ${task.branch ? `<div><strong>Branch:</strong> ${task.branch}</div>` : ''}
                     <div><strong>Labels:</strong> ${labelsDisplay}</div>
-                    <div><strong>Outcome:</strong> ${outcomeDisplay}</div>
+                    ${task.status === 'done' ? `<div><strong>Outcome:</strong> ${outcomeDisplay}</div>` : ''}
                     ${task.id ? `<div><strong>ID:</strong> ${task.id}</div>` : ''}
                 </div>
             </div>

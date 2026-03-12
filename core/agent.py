@@ -45,6 +45,7 @@ class Agent:
         "respond_to_user", "delegate", "update_task", "update_memory",
         "write_document", "update_document", "resolve_comments",
         "start_conversation", "end_conversation",
+        "request_capability", "search_mcp_registry", "deploy_mcp",
     }
 
     # Max "other team tasks" shown in prompt context.
@@ -87,6 +88,7 @@ class Agent:
         self._stateless: bool = stateless
         self._allowed_actions: set[str] | None = allowed_actions  # None = all
         self.deps: dict[str, Any] = {}  # generic dependency store
+        self.mcp_config_path: Path | None = None  # per-agent MCP server config
 
         # Prompt template + team roster (used by update_team_roster)
         self._prompt_template: str = system_prompt
@@ -458,6 +460,7 @@ class Agent:
             working_dir=self.working_dir,
             timeout=self.timeout,
             max_budget_usd=self.max_budget_usd,
+            mcp_config_path=self.mcp_config_path,
         )
 
         # Retry on stale session: clear the session and invoke fresh
@@ -477,6 +480,7 @@ class Agent:
                 working_dir=self.working_dir,
                 timeout=self.timeout,
                 max_budget_usd=self.max_budget_usd,
+                mcp_config_path=self.mcp_config_path,
             )
 
         if self.use_session and result.session_id and self._session_store:
@@ -570,6 +574,7 @@ class Agent:
             session_id=session_id,
             working_dir=self.working_dir,
             timeout=self.timeout,
+            mcp_config_path=self.mcp_config_path,
         )
 
         # Record retry stats
@@ -722,6 +727,17 @@ class Agent:
         if self._current_task_plan and msg.task_id:
             parts.append(f"[Your Plan for This Task]\n{self._current_task_plan}\n---")
 
+        # 3c. Connected MCP servers
+        if self.mcp_config_path and self.mcp_config_path.exists():
+            try:
+                import json as _json
+                mcp_data = _json.loads(self.mcp_config_path.read_text())
+                server_names = list(mcp_data.get("mcpServers", {}).keys())
+                if server_names:
+                    parts.append(f"[Connected MCP Servers: {', '.join(server_names)}]\n---")
+            except Exception:
+                pass
+
         # 4. Original message
         parts.append(f"[Message from {msg.sender}]")
         parts.append(f"Type: {msg.type.value}")
@@ -771,9 +787,23 @@ class Agent:
             lines.append("\nOTHER TEAM TASKS:")
             for t in shown:
                 assignee = t.assignee or "unassigned"
-                lines.append(f"  - [P{t.priority}] [{t.status.value}] {t.title} (assignee: {assignee})")
+                lines.append(f"  - [P{t.priority}] [{t.status.value}] {t.title} (id: {t.id}, assignee: {assignee})")
             if len(other_tasks) > len(shown):
                 lines.append(f"  ... and {len(other_tasks) - len(shown)} more")
+
+        lines.append("")
+        lines.append(
+            "NOTE: When asked for a status update, report ONLY on YOUR TASKS above. "
+            "Other team tasks are shown for coordination context only — do not report "
+            "on work done by other agents unless you directly manage them.\n\n"
+            "IMPORTANT: A status update request is also a nudge to take action. "
+            "After giving your update, check your task list:\n"
+            "1. If you have IN-PROGRESS tasks you are not actively working on — "
+            "resume working on them immediately.\n"
+            "2. If you have no in-progress tasks but have PENDING tasks assigned to you — "
+            "pick the highest-priority one, move it to in-progress, and start working on it.\n"
+            "Do not just report status — take action on your tasks."
+        )
 
         return "\n".join(lines)
 
@@ -882,6 +912,14 @@ class Agent:
         "resolve_comments": {
             "comments": "resolutions",
             "results": "resolutions",
+        },
+        "assign_ticket": {
+            "message": "task_description",
+            "description": "task_description",
+            "content": "task_description",
+            "target": "to",
+            "agent": "to",
+            "title": "task_title",
         },
     }
 

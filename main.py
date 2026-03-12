@@ -58,6 +58,10 @@ from db.repositories.provider_history_repo import ProviderHistoryRepository
 from db.repositories.user_repo import UserRepository
 from db.repositories.org_repo import OrgRepository
 from db.repositories.invite_repo import InviteRepository
+from db.repositories.mcp_repo import MCPRepository
+from db.repositories.action_error_repo import ActionErrorRepository
+from core.mcp_registry import MCPRegistry
+from core.mcp_manager import MCPManager
 from core.providers.factory import create_provider, FallbackProvider
 
 logging.basicConfig(
@@ -160,6 +164,8 @@ class ProjectLifecycleManager:
         user_repo = UserRepository(self._sf)
         org_repo = OrgRepository(self._sf)
         invite_repo = InviteRepository(self._sf)
+        mcp_repo = MCPRepository(self._sf)
+        action_error_repo = ActionErrorRepository(self._sf)
 
         # Ensure default org exists
         await org_repo.ensure_default()
@@ -231,6 +237,7 @@ class ProjectLifecycleManager:
 
         # Action registry (centralized action handling)
         action_registry = create_default_registry()
+        action_registry.set_error_repo(action_error_repo, project_id)
 
         # Wire conversation manager
         conversation_manager.set_broadcast(broker.broadcast_event)
@@ -245,6 +252,17 @@ class ProjectLifecycleManager:
             await container_manager.ensure_image()
         except Exception:
             logger.warning("Docker image build failed — containerized agents unavailable")
+
+        # MCP server management
+        mcp_config_dir = project_dir / "mcp_configs"
+        mcp_registry = MCPRegistry()
+        mcp_manager = MCPManager(
+            mcp_repo=mcp_repo,
+            container_manager=container_manager,
+            project_id=project_id,
+            config_dir=mcp_config_dir,
+            messages_dir=messages_dir,
+        )
 
         # ── Load team structure (global + per-project override) ──
         team_structure = load_team_structure(BASE_DIR, project_dir)
@@ -265,6 +283,8 @@ class ProjectLifecycleManager:
             "container_manager": container_manager,
             "project_store": ps,
             "team_structure": team_structure,
+            "mcp_manager": mcp_manager,
+            "mcp_registry": mcp_registry,
         }
 
         # Apply model overrides from team_config.yaml (backward compat)
@@ -438,6 +458,13 @@ class ProjectLifecycleManager:
                 except RuntimeError as e:
                     logger.warning("Could not create worktree for %s: %s", agent.agent_id, e)
 
+        # Restore MCP configs for agents that have installed servers
+        for agent in registry.get_all():
+            config_path = mcp_manager.get_mcp_config_path(agent.agent_id)
+            if config_path:
+                agent.mcp_config_path = config_path
+                logger.info("Restored MCP config for agent %s: %s", agent.agent_id, config_path)
+
         # Start agents
         for agent in registry.get_all():
             await agent.start()
@@ -516,6 +543,10 @@ class ProjectLifecycleManager:
             "user_repo": user_repo,
             "org_repo": org_repo,
             "invite_repo": invite_repo,
+            "mcp_repo": mcp_repo,
+            "mcp_manager": mcp_manager,
+            "mcp_registry": mcp_registry,
+            "action_error_repo": action_error_repo,
         }
 
 

@@ -672,3 +672,33 @@ async def delete_role(role_id: str, request: Request):
 
     logger.info("Role deleted: %s", role_id)
     return {"status": "deleted", "role_id": role_id}
+
+
+# ── Action Validation Errors ──────────────────────────────────────────
+
+
+@router.get("/action-errors")
+async def list_action_errors(request: Request, limit: int = 50):
+    """List recent action validation errors for review."""
+    action_error_repo = getattr(request.app.state, "action_error_repo", None)
+    if not action_error_repo:
+        return JSONResponse({"error": "Action error tracking not configured"}, status_code=503)
+
+    project_id = getattr(request.app.state, "project_id", None)
+    if not project_id:
+        return JSONResponse({"error": "No active project"}, status_code=503)
+
+    errors = await action_error_repo.get_recent(project_id, limit=limit)
+    return {
+        "errors": [
+            {
+                "id": e.id,
+                "agent_id": e.agent_id,
+                "action_name": e.action_name,
+                "errors": e.errors,
+                "payload": e.payload,
+                "created_at": e.created_at.isoformat() if e.created_at else None,
+            }
+            for e in errors
+        ]
+    }

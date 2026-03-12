@@ -79,6 +79,36 @@ async def init_db(url: str | None = None) -> None:
             except Exception:
                 pass  # Column already exists
 
+    # Ensure agent_roles are re-seeded when new actions/deps are added
+    # (dev-mode: drop and re-seed roles to pick up new capabilities)
+    async with _session_factory() as session:
+        from db.models.role import AgentRole
+        result = await session.execute(text("SELECT allowed_actions FROM agent_roles WHERE role_id = 'robot_resources' LIMIT 1"))
+        row = result.first()
+        if row:
+            import json as _json
+            try:
+                actions = _json.loads(row[0]) if isinstance(row[0], str) else row[0]
+                if "search_mcp_registry" not in actions:
+                    await session.execute(text("DELETE FROM agent_roles"))
+                    await session.commit()
+                    logger.info("Cleared agent_roles for re-seeding (new MCP actions)")
+            except Exception:
+                pass
+
+        # Also check: request_capability should NOT be in project_manager's actions
+        result2 = await session.execute(text("SELECT allowed_actions FROM agent_roles WHERE role_id = 'project_manager' LIMIT 1"))
+        row2 = result2.first()
+        if row2:
+            try:
+                pm_actions = _json.loads(row2[0]) if isinstance(row2[0], str) else row2[0]
+                if "request_capability" in pm_actions:
+                    await session.execute(text("DELETE FROM agent_roles"))
+                    await session.commit()
+                    logger.info("Cleared agent_roles for re-seeding (request_capability scope fix)")
+            except Exception:
+                pass
+
     # Seed default organization (existing data uses tenant_id='default')
     async with _session_factory() as session:
         from db.models.organization import Organization

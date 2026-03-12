@@ -750,6 +750,29 @@ class Agent:
 
         return "\n".join(parts)
 
+    @staticmethod
+    def _compute_velocity(tasks) -> dict:
+        """Compute per-agent velocity from completed tasks with timing data."""
+        from datetime import datetime as _dt
+        velocity: dict[str, dict] = {}
+        for t in tasks:
+            if t.status != TaskStatus.DONE or not t.completed_at or not t.estimate or not t.assignee or not t.started_at:
+                continue
+            try:
+                started = _dt.fromisoformat(t.started_at)
+                completed = _dt.fromisoformat(t.completed_at)
+                dur_min = (completed - started).total_seconds() / 60
+                if dur_min <= 0:
+                    continue
+            except (ValueError, TypeError):
+                continue
+            if t.assignee not in velocity:
+                velocity[t.assignee] = {"points": 0, "total_min": 0, "tasks": 0}
+            velocity[t.assignee]["points"] += t.estimate
+            velocity[t.assignee]["total_min"] += dur_min
+            velocity[t.assignee]["tasks"] += 1
+        return velocity
+
     def _build_task_context(self) -> str:
         """Build task board summary, emphasising this agent's tasks."""
         tasks = self._task_board.get_all_tasks()
@@ -776,7 +799,8 @@ class Agent:
             lines.append("YOUR TASKS (ordered by priority — review tasks first):")
             for t in my_tasks:
                 review_marker = " [NEEDS YOUR REVIEW]" if (t.status == TaskStatus.REVIEW and t.reviewer == self.agent_id) else ""
-                lines.append(f"  - [P{t.priority}] [{t.status.value}] {t.title} (id: {t.id}){review_marker}")
+                est = f" [{t.estimate}sp]" if t.estimate else ""
+                lines.append(f"  - [P{t.priority}] [{t.status.value}]{est} {t.title} (id: {t.id}){review_marker}")
 
         if other_tasks:
             limit = self.max_task_context_items
@@ -787,9 +811,22 @@ class Agent:
             lines.append("\nOTHER TEAM TASKS:")
             for t in shown:
                 assignee = t.assignee or "unassigned"
-                lines.append(f"  - [P{t.priority}] [{t.status.value}] {t.title} (id: {t.id}, assignee: {assignee})")
+                est = f" [{t.estimate}sp]" if t.estimate else ""
+                lines.append(f"  - [P{t.priority}] [{t.status.value}]{est} {t.title} (id: {t.id}, assignee: {assignee})")
             if len(other_tasks) > len(shown):
                 lines.append(f"  ... and {len(other_tasks) - len(shown)} more")
+
+        # Velocity data for management agents
+        if self.max_task_context_items is None:
+            velocity = self._compute_velocity(tasks)
+            if velocity:
+                lines.append("\nVELOCITY DATA (completed tasks):")
+                for aid, data in sorted(velocity.items()):
+                    pts_per_30 = round(30 / (data["total_min"] / data["points"]), 1) if data["points"] and data["total_min"] > 0 else "N/A"
+                    lines.append(
+                        f"  {aid}: {data['points']}sp in {data['total_min']:.0f}min "
+                        f"({data['tasks']} tasks) => ~{pts_per_30}sp/30min"
+                    )
 
         lines.append("")
         lines.append(

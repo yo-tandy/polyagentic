@@ -73,7 +73,10 @@ DEFAULT_ROLE_SEEDS: list[dict] = [
         "timeout": 300,
         "max_budget_usd": None,
         "deps": [],
-        "allowed_actions": UNIVERSAL_ACTIONS + ["assign_ticket"],
+        "allowed_actions": UNIVERSAL_ACTIONS + [
+            "assign_ticket", "create_batch_tickets",
+            "create_phase", "update_phase",
+        ],
     },
     {
         "role_id": "product_manager",

@@ -27,6 +27,36 @@ When assigning tickets:
 4. **Group related work** -- assign related tickets to the same agent when possible
 5. **Use priority levels**: P1=critical (blockers), P2=high (core features), P3=medium (standard), P4=low, P5=backlog
 
+## Sprint Management
+
+You manage sprint cycles. Each sprint targets **30 minutes** of real time.
+
+### Sprint Capacity
+- **Default capacity**: 30 story points per agent per 30-minute sprint
+- Your task context includes **VELOCITY DATA** showing actual completion rates per agent
+- If an agent completed 20sp in 30min last cycle, their next sprint capacity is 20sp — not 30
+- If no velocity data exists yet, use the default 30sp assumption
+
+### Scheduling Draft → Pending
+When Manny has estimated and assigned draft tasks:
+1. Check each agent's current workload: sum of story points for their pending + in_progress tasks
+2. Calculate remaining capacity = sprint_capacity − current_workload
+3. Move draft tasks to pending (using `update_task` with `status: "pending"`) up to each agent's remaining capacity
+4. Prioritize by priority level (P1 first), then by estimate (smaller first for quick wins)
+5. Do NOT overload agents — leave headroom for blockers and overhead
+
+### Example: Move a draft to pending
+```action
+{"action": "update_task", "task_id": "task-abc123", "status": "pending"}
+```
+
+### Sprint Review
+After a sprint cycle completes (all pending tasks done, or ~30 minutes elapsed):
+1. Review VELOCITY DATA in your task context
+2. Adjust capacity estimates per agent based on actual throughput
+3. Schedule the next batch of draft tasks into pending
+4. Report sprint results to the user via `respond_to_user`
+
 ## Progress Monitoring
 - Track which tasks are in_progress vs blocked vs done
 - When an agent hasn't made progress, send a follow-up message

@@ -72,6 +72,10 @@ async def init_db(url: str | None = None) -> None:
             "ALTER TABLE team_agent_defs ADD COLUMN fallback_provider VARCHAR(20)",
             # User attribution (Phase 5)
             "ALTER TABLE message_log ADD COLUMN user_id VARCHAR(64)",
+            # Sprint estimation & velocity tracking
+            "ALTER TABLE tasks ADD COLUMN estimate INTEGER",
+            "ALTER TABLE tasks ADD COLUMN started_at VARCHAR(50)",
+            "ALTER TABLE tasks ADD COLUMN completed_at VARCHAR(50)",
         ]:
             try:
                 await conn.execute(text(stmt))
@@ -96,16 +100,16 @@ async def init_db(url: str | None = None) -> None:
             except Exception:
                 pass
 
-        # Also check: request_capability should NOT be in project_manager's actions
+        # Also check: project_manager should have create_batch_tickets
         result2 = await session.execute(text("SELECT allowed_actions FROM agent_roles WHERE role_id = 'project_manager' LIMIT 1"))
         row2 = result2.first()
         if row2:
             try:
                 pm_actions = _json.loads(row2[0]) if isinstance(row2[0], str) else row2[0]
-                if "request_capability" in pm_actions:
+                if "create_batch_tickets" not in pm_actions or "request_capability" in pm_actions:
                     await session.execute(text("DELETE FROM agent_roles"))
                     await session.commit()
-                    logger.info("Cleared agent_roles for re-seeding (request_capability scope fix)")
+                    logger.info("Cleared agent_roles for re-seeding (PM permissions update)")
             except Exception:
                 pass
 

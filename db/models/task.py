@@ -21,6 +21,7 @@ class TaskModel(Base, TimestampMixin, TenantMixin):
     role: Mapped[str | None] = mapped_column(String(100), nullable=True)
     reviewer: Mapped[str | None] = mapped_column(String(100), nullable=True)
     priority: Mapped[int] = mapped_column(Integer, default=3)
+    estimate: Mapped[int | None] = mapped_column(Integer, nullable=True)
     labels: Mapped[list] = mapped_column(JSON, default=list)
     branch: Mapped[str | None] = mapped_column(String(200), nullable=True)
     parent_task_id: Mapped[str | None] = mapped_column(
@@ -36,6 +37,8 @@ class TaskModel(Base, TimestampMixin, TenantMixin):
     outcome: Mapped[str | None] = mapped_column(String(50), nullable=True)
     completion_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     review_output: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    completed_at: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
     progress_notes: Mapped[list[TaskProgressNote]] = relationship(
         back_populates="task", cascade="all, delete-orphan",

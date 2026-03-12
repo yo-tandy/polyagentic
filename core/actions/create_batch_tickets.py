@@ -25,7 +25,7 @@ class CreateBatchTickets(BaseAction):
         ActionField("phase_id", "string", required=True,
                      description="Phase to add tickets to"),
         ActionField("tickets", "array", required=True,
-                     description="Array of ticket objects: {title, description, priority, labels, role}"),
+                     description="Array of ticket objects: {title, description, priority, labels, role, estimate}"),
     ]
 
     example = {
@@ -62,6 +62,7 @@ class CreateBatchTickets(BaseAction):
                 category="project",
                 phase_id=phase_id,
                 initial_status=TaskStatus.DRAFT,
+                estimate=ticket.get("estimate"),
             )
             created += 1
 

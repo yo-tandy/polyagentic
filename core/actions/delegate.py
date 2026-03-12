@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from core.actions.base import BaseAction, ActionField, ActionContext
 from core.message import Message, MessageType
+from core.task import TaskStatus
 
 if TYPE_CHECKING:
     from core.agent import Agent
@@ -34,6 +35,12 @@ class Delegate(BaseAction):
                      enum=["operational", "project"]),
         ActionField("phase_id", "string",
                      description="Phase ID for project tasks"),
+        ActionField("estimate", "integer",
+                     description="Story point estimate (Fibonacci: 1, 2, 3, 5, 8, 13)"),
+        ActionField("initial_status", "string",
+                     description="Initial status: draft (default, for estimation) or pending (immediate)",
+                     default="draft",
+                     enum=["draft", "pending"]),
     ]
 
     example = {
@@ -56,6 +63,9 @@ class Delegate(BaseAction):
         role = action.get("role", None)
         category = action.get("category", "operational")
         phase_id = action.get("phase_id")
+        estimate = action.get("estimate")
+        initial_status_str = action.get("initial_status", "draft")
+        initial_status = TaskStatus(initial_status_str)
 
         # Smart routing: agents with _registry check if target exists
         registry = agent.deps.get("registry")
@@ -66,20 +76,25 @@ class Delegate(BaseAction):
 
         task_id = None
         if agent._task_board:
+            # Draft tasks don't get an assignee — assignment happens during estimation
+            is_draft = initial_status == TaskStatus.DRAFT
             task = await agent._task_board.create_task(
                 title=title,
                 description=desc,
                 created_by=agent.agent_id,
-                assignee=to if is_known_agent else None,
+                assignee=(to if is_known_agent and not is_draft else None),
                 role=role or (to if (registry and not is_known_agent) else None),
                 priority=priority,
                 labels=labels,
                 category=category,
                 phase_id=phase_id,
+                estimate=estimate,
+                initial_status=initial_status,
             )
             task_id = task.id
 
-        if is_known_agent and to:
+        # Don't send message for draft tasks — Jerry will notify when scheduling
+        if is_known_agent and to and initial_status != TaskStatus.DRAFT:
             return [Message(
                 sender=agent.agent_id,
                 recipient=to,

@@ -61,7 +61,8 @@ class TaskBoard:
                           priority: int = 3, labels: list[str] | None = None,
                           category: str = "operational",
                           phase_id: str | None = None,
-                          initial_status: TaskStatus | None = None) -> Task:
+                          initial_status: TaskStatus | None = None,
+                          estimate: int | None = None) -> Task:
         status = initial_status or TaskStatus.PENDING
         task = Task(
             title=title,
@@ -75,6 +76,7 @@ class TaskBoard:
             parent_task_id=parent_task_id,
             category=category,
             phase_id=phase_id,
+            estimate=estimate,
         )
         # Write to DB
         await self._repo.create(
@@ -92,6 +94,7 @@ class TaskBoard:
             created_by=task.created_by,
             category=task.category,
             phase_id=task.phase_id,
+            estimate=task.estimate,
         )
         # Update cache
         self._tasks[task.id] = task
@@ -158,6 +161,12 @@ class TaskBoard:
                 # Clear outcome when re-opening (leaving done)
                 if task.status == TaskStatus.DONE and new_status != TaskStatus.DONE:
                     kwargs.setdefault("outcome", None)
+
+                # Auto-set velocity timestamps
+                if new_status == TaskStatus.IN_PROGRESS and not task.started_at:
+                    kwargs["started_at"] = datetime.now(timezone.utc).isoformat()
+                if new_status == TaskStatus.DONE:
+                    kwargs["completed_at"] = datetime.now(timezone.utc).isoformat()
 
         for key, value in kwargs.items():
             if hasattr(task, key):
@@ -285,4 +294,7 @@ class TaskBoard:
             progress_notes=notes,
             subtasks=rec.subtasks or [],
             messages=rec.messages or [],
+            estimate=getattr(rec, "estimate", None),
+            started_at=getattr(rec, "started_at", None),
+            completed_at=getattr(rec, "completed_at", None),
         )

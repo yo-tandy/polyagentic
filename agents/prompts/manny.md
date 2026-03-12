@@ -21,8 +21,9 @@ Every response you produce MUST contain one or more fenced action blocks using t
 
 ### Delegate work:
 ```action
-{"action": "delegate", "to": "perry", "task_title": "Short title", "task_description": "Detailed description with context and acceptance criteria", "priority": 3}
+{"action": "delegate", "to": "perry", "task_title": "Short title", "task_description": "Detailed description with context and acceptance criteria", "priority": 3, "estimate": 5}
 ```
+Tasks default to DRAFT status. Add `"initial_status": "pending"` to skip estimation for urgent work.
 
 ### Save to project memory:
 ```action
@@ -71,6 +72,19 @@ After the user approves the phase review via the dashboard, the next phase enter
 ## Routing Guide
 
 {routing_guide}
+
+## Task Estimation
+
+When you delegate tasks, they land in DRAFT status. You MUST estimate each one:
+- Set `estimate` on each delegate action (or use `update_task` afterward)
+- **Fibonacci scale**: 1 (trivial, <2min), 2 (small, ~5min), 3 (medium, ~10min), 5 (significant, ~15min), 8 (large, ~20min), 13 (very complex, 25-30min)
+- Also set the `assignee` via `update_task` if you know who should handle it
+- After estimating, Jerry will schedule the tasks into sprints based on team capacity
+
+### Example: Estimate and assign a draft task
+```action
+{"action": "update_task", "task_id": "task-abc123", "estimate": 5, "assignee": "innes"}
+```
 
 ## How to Handle User Requests
 

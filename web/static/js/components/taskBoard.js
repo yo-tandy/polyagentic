@@ -162,11 +162,15 @@ const TaskBoard = {
                 const categoryBadge = t.category === 'project'
                     ? '<span class="task-badge task-badge--project">PRJ</span>'
                     : '';
+                const estimateBadge = t.estimate
+                    ? `<span class="task-badge task-badge--estimate">${t.estimate}sp</span>`
+                    : '';
                 return `
                     <div class="task-card" data-task-id="${t.id}" data-assignee="${t.assignee || ''}" data-priority="${t.priority || 3}">
                         <div class="task-card__header">
                             <span class="task-card__priority priority--${t.priority || 3}">P${t.priority || 3}</span>
                             ${categoryBadge}
+                            ${estimateBadge}
                             ${outcomeHtml}
                             <span class="task-card__assignee">${this._escapeHtml(assigneeText)}</span>
                             <span class="task-card__age">${this._formatAge(t.created_at)}</span>
@@ -323,6 +327,7 @@ const TaskBoard = {
                     <div><strong>Category:</strong> <span class="task-badge task-badge--${task.category || 'operational'}">${(task.category || 'operational').toUpperCase()}</span></div>
                     ${phaseName ? `<div><strong>Phase:</strong> ${phaseName}</div>` : ''}
                     <div><strong>Priority:</strong> <span class="priority--${task.priority || 3}">P${task.priority || 3}</span></div>
+                    ${task.estimate ? `<div><strong>Estimate:</strong> <span class="task-badge task-badge--estimate">${task.estimate}sp</span></div>` : ''}
                     <div><strong>Assignee:</strong> ${this._escapeHtml(assigneeDisplay)}</div>
                     <div><strong>Created by:</strong> ${task.created_by || 'unknown'}</div>
                     <div><strong>Reviewer:</strong> ${task.reviewer || 'Not assigned'}</div>

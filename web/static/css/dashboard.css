@@ -2466,6 +2466,11 @@
     color: white;
 }
 
+.task-badge--estimate {
+    background: #6366f1;
+    color: white;
+}
+
 /* ── Phase info in task cards ── */
 .task-card__phase {
     font-size: 9px;

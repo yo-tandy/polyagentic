@@ -29,6 +29,7 @@ class Task:
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     priority: int = 3  # 1=critical, 2=high, 3=medium, 4=low, 5=backlog
+    estimate: int | None = None  # story points: 1, 2, 3, 5, 8, 13
     labels: list[str] = field(default_factory=list)  # e.g. ["phase-1", "documentation"]
     reviewer: str | None = None
     paused_summary: str | None = None
@@ -42,6 +43,8 @@ class Task:
     progress_notes: list[dict] = field(default_factory=list)
     completion_summary: str | None = None
     review_output: str | None = None
+    started_at: str | None = None    # set when task moves to in_progress
+    completed_at: str | None = None  # set when task moves to done
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -59,10 +62,13 @@ class Task:
         data.setdefault("labels", [])
         data.setdefault("reviewer", None)
         data.setdefault("paused_summary", None)
+        data.setdefault("estimate", None)
         data.setdefault("outcome", None)
         data.setdefault("progress_notes", [])
         data.setdefault("completion_summary", None)
         data.setdefault("review_output", None)
+        data.setdefault("started_at", None)
+        data.setdefault("completed_at", None)
         return cls(**data)
 
     def touch(self):

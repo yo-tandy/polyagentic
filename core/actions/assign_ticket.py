@@ -35,6 +35,8 @@ class AssignTicket(BaseAction):
         ActionField("initial_status", "string",
                      description="Initial status: draft (unassigned) or pending",
                      enum=["draft", "pending"]),
+        ActionField("estimate", "integer",
+                     description="Story point estimate (Fibonacci: 1, 2, 3, 5, 8, 13)"),
     ]
 
     async def execute(
@@ -50,6 +52,7 @@ class AssignTicket(BaseAction):
         phase_id = action.get("phase_id")
         initial_status_str = action.get("initial_status")
         initial_status = TaskStatus(initial_status_str) if initial_status_str else None
+        estimate = action.get("estimate")
 
         task_id = None
         if agent._task_board:
@@ -63,6 +66,7 @@ class AssignTicket(BaseAction):
                 category=category,
                 phase_id=phase_id,
                 initial_status=initial_status,
+                estimate=estimate,
             )
             task_id = task.id
 

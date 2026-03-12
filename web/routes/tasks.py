@@ -42,6 +42,7 @@ class TaskUpdateRequest(BaseModel):
     labels: list[str] | None = None
     outcome: str | None = None
     role: str | None = None
+    estimate: int | None = None
 
 
 @router.patch("/tasks/{task_id}")
@@ -67,6 +68,8 @@ async def update_task(task_id: str, body: TaskUpdateRequest, request: Request):
         updates["outcome"] = body.outcome
     if body.role is not None:
         updates["role"] = body.role
+    if body.estimate is not None:
+        updates["estimate"] = body.estimate
 
     result = await task_board.update_task(task_id, **updates)
     if result is None:

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-import uuid
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from enum import Enum
+
+from core.constants import gen_id
 
 
 class TaskStatus(str, Enum):
@@ -22,7 +23,7 @@ class Task:
     title: str
     description: str
     created_by: str
-    id: str = field(default_factory=lambda: f"task-{uuid.uuid4().hex[:8]}")
+    id: str = field(default_factory=lambda: gen_id("task-", 8))
     status: TaskStatus = TaskStatus.PENDING
     assignee: str | None = None
     role: str | None = None  # target role for unassigned tasks (e.g. "backend_developer")

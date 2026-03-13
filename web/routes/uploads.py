@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import logging
-import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
+from core.constants import gen_id
 from core.file_processor import process_file, validate_file
 from core.message import Message, MessageType
 
@@ -48,7 +48,7 @@ async def upload_file(
     uploads_dir.mkdir(parents=True, exist_ok=True)
 
     ext = Path(file.filename or "unknown").suffix.lower()
-    unique_name = f"{uuid.uuid4().hex[:12]}{ext}"
+    unique_name = f"{gen_id()}{ext}"
     file_path = uploads_dir / unique_name
     file_path.write_bytes(content_bytes)
 
@@ -122,14 +122,29 @@ async def upload_file(
 async def download_file(doc_id: str, request: Request):
     """Download the original uploaded file."""
     kb = request.app.state.knowledge_base
-    if not kb:
+    project_store = request.app.state.project_store
+    if not kb or not project_store:
         return JSONResponse({"error": "KB not available"}, status_code=503)
 
     doc = await kb.get_document(doc_id)
     if not doc or not doc.get("upload_path"):
         return JSONResponse({"error": "File not found"}, status_code=404)
 
-    file_path = Path(doc["upload_path"])
+    file_path = Path(doc["upload_path"]).resolve()
+
+    # Path traversal protection: ensure the file lives inside a project dir
+    project = project_store.get_active_project()
+    if project:
+        uploads_root = project_store.get_project_dir(project["id"]).resolve()
+        try:
+            file_path.relative_to(uploads_root)
+        except ValueError:
+            logger.warning(
+                "Path traversal blocked: doc %s references %s outside %s",
+                doc_id, file_path, uploads_root,
+            )
+            return JSONResponse({"error": "Access denied"}, status_code=403)
+
     if not file_path.exists():
         return JSONResponse({"error": "File no longer exists on disk"}, status_code=404)
 

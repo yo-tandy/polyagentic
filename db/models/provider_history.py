@@ -8,12 +8,12 @@ history so sessions can persist across server restarts.
 
 from __future__ import annotations
 
-import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import DateTime, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
+from core.constants import gen_id
 from db.models.base import Base
 
 
@@ -22,7 +22,7 @@ class ProviderMessage(Base):
 
     id: Mapped[str] = mapped_column(
         String(64), primary_key=True,
-        default=lambda: f"pmsg_{uuid.uuid4().hex[:12]}",
+        default=lambda: gen_id("pmsg_"),
     )
     session_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     agent_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)

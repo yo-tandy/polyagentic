@@ -45,7 +45,7 @@ class RecruitAgent(BaseAction):
             )
             return []
 
-        from web.routes.config import create_and_register_agent
+        from web.services.agent_service import create_and_register_agent
         from config import DEFAULT_MODEL, CLAUDE_ALLOWED_TOOLS_DEV
 
         name = action.get("name", "")

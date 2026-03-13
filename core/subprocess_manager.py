@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from config import CLAUDE_CLI
+from core.constants import SENSITIVE_ENV_VARS
 
 logger = logging.getLogger(__name__)
 
@@ -141,9 +142,10 @@ class SubprocessManager:
         self, cmd: list[str], working_dir: Path | None, timeout: int
     ) -> tuple[bytes, bytes, int]:
         """Execute a subprocess and return (stdout, stderr, returncode)."""
-        # Remove CLAUDECODE env var so nested Claude Code sessions don't
-        # detect they're inside another session and refuse to start
-        env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+        # Filter sensitive env vars (API keys, secrets) so agent subprocesses
+        # cannot access them.  Also removes CLAUDECODE to prevent nested
+        # Claude Code sessions from detecting the parent session.
+        env = {k: v for k, v in os.environ.items() if k not in SENSITIVE_ENV_VARS}
 
         proc = await asyncio.create_subprocess_exec(
             *cmd,

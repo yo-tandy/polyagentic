@@ -15,17 +15,17 @@ import json
 import logging
 import secrets
 import time
-import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlencode
 
 import httpx
 import jwt
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
 
+from core.constants import JWT_ALGORITHM, JWT_EXPIRY_SECONDS, LOCALHOST_HOSTS, gen_id
 from db.repositories.user_repo import UserRepository
 from db.repositories.org_repo import OrgRepository
 from db.repositories.invite_repo import InviteRepository
@@ -57,38 +57,51 @@ def _get_jwt_secret(request: Request) -> str:
 
 def create_jwt(
     user_id: str, org_id: str, email: str, name: str,
-    secret: str, ttl_seconds: int = 3600,
+    secret: str, ttl_seconds: int = JWT_EXPIRY_SECONDS,
+    role: str = "admin",
 ) -> str:
-    """Create a signed JWT with 1hr default expiry."""
+    """Create a signed JWT with configurable expiry (default 1hr)."""
     now = int(time.time())
     payload = {
         "sub": user_id,
         "org_id": org_id,
         "email": email,
         "name": name,
+        "role": role,
         "iat": now,
         "exp": now + ttl_seconds,
     }
-    return jwt.encode(payload, secret, algorithm="HS256")
+    return jwt.encode(payload, secret, algorithm=JWT_ALGORITHM)
 
 
 def decode_jwt(token: str, secret: str) -> dict | None:
     """Decode and validate a JWT. Returns None on failure."""
     try:
-        return jwt.decode(token, secret, algorithms=["HS256"])
+        return jwt.decode(token, secret, algorithms=[JWT_ALGORITHM])
     except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
         return None
 
 
-def set_auth_cookie(response, token: str) -> None:
-    """Set the session JWT as an HTTP-only cookie."""
+def _is_localhost(request: Request) -> bool:
+    """Check if the request originates from localhost."""
+    host = (request.headers.get("host") or "").split(":")[0]
+    return host in LOCALHOST_HOSTS
+
+
+def set_auth_cookie(response, token: str, *, request: Request | None = None) -> None:
+    """Set the session JWT as an HTTP-only cookie.
+
+    When *request* is provided the ``Secure`` flag is set automatically:
+    ``True`` for non-localhost origins, ``False`` for localhost.
+    """
+    secure = False if (request is None or _is_localhost(request)) else True
     response.set_cookie(
         key="session_token",
         value=token,
         httponly=True,
-        secure=False,  # False for localhost; True in production
+        secure=secure,
         samesite="lax",
-        max_age=3600,
+        max_age=JWT_EXPIRY_SECONDS,
         path="/",
     )
 
@@ -194,7 +207,7 @@ async def google_callback(request: Request, code: str = "", error: str = ""):
         jwt_secret = _get_jwt_secret(request)
         token = create_jwt(user.id, user.org_id, user.email, user.name, jwt_secret)
         response = RedirectResponse("/", status_code=302)
-        set_auth_cookie(response, token)
+        set_auth_cookie(response, token, request=request)
         return response
 
     # New user — need to pick/create org
@@ -248,7 +261,7 @@ async def complete_signup(body: CompleteSignupRequest, request: Request):
     if body.action == "create_org":
         if not body.org_name or not body.org_name.strip():
             return JSONResponse({"error": "Organization name is required."}, status_code=400)
-        org_id = f"org_{uuid.uuid4().hex[:12]}"
+        org_id = gen_id("org_")
         await org_repo.create(id=org_id, name=body.org_name.strip())
         logger.info("New org created: %s (%s)", body.org_name, org_id)
 
@@ -265,7 +278,7 @@ async def complete_signup(body: CompleteSignupRequest, request: Request):
         return JSONResponse({"error": "Invalid action."}, status_code=400)
 
     # Create user
-    user_id = f"u_{uuid.uuid4().hex[:12]}"
+    user_id = gen_id("u_")
     user = await user_repo.create(
         id=user_id, email=email, name=name, google_sub=google_sub,
         org_id=org_id, picture_url=picture,
@@ -301,4 +314,21 @@ async def get_current_user(request: Request) -> dict:
     if not user:
         from fastapi import HTTPException
         raise HTTPException(status_code=401, detail="Not authenticated")
+    return user
+
+
+async def require_admin(request: Request) -> dict:
+    """FastAPI dependency that enforces admin role on state-changing endpoints.
+
+    Returns the user dict if the user has an admin/owner role.
+    Raises 403 otherwise.
+    """
+    from fastapi import HTTPException
+
+    user = getattr(request.state, "user", None)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    role = user.get("role", "member")
+    if role not in ("admin", "owner"):
+        raise HTTPException(status_code=403, detail="Admin access required")
     return user

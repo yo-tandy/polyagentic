@@ -20,15 +20,10 @@ class InviteRepository(BaseRepository):
         token: str, expires_at: datetime | None = None,
         max_uses: int | None = None,
     ) -> InviteLink:
-        async with self._session() as session:
-            invite = InviteLink(
-                id=id, org_id=org_id, created_by_user_id=created_by_user_id,
-                token=token, expires_at=expires_at, max_uses=max_uses,
-            )
-            session.add(invite)
-            await session.commit()
-            await session.refresh(invite)
-            return invite
+        return await self._create(InviteLink(
+            id=id, org_id=org_id, created_by_user_id=created_by_user_id,
+            token=token, expires_at=expires_at, max_uses=max_uses,
+        ))
 
     async def get_by_token(self, token: str) -> InviteLink | None:
         async with self._session() as session:
@@ -37,17 +32,12 @@ class InviteRepository(BaseRepository):
             return result.scalar_one_or_none()
 
     async def list_active(self, org_id: str) -> list[InviteLink]:
-        async with self._session() as session:
-            stmt = (
-                select(InviteLink)
-                .where(
-                    InviteLink.org_id == org_id,
-                    InviteLink.is_active == True,  # noqa: E712
-                )
-                .order_by(InviteLink.created_at.desc())
-            )
-            result = await session.execute(stmt)
-            return list(result.scalars().all())
+        return await self._list_all(
+            InviteLink,
+            InviteLink.org_id == org_id,
+            InviteLink.is_active == True,  # noqa: E712
+            order_by=InviteLink.created_at.desc(),
+        )
 
     async def increment_use_count(self, invite_id: str) -> None:
         async with self._session() as session:

@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import json
 import logging
-import uuid
 from typing import Any
 
 from sqlalchemy import delete, func, select
 
+from core.constants import gen_id
 from db.models.provider_history import ProviderMessage
 from db.repositories.base import BaseRepository
 
@@ -19,7 +19,7 @@ class ProviderHistoryRepository(BaseRepository):
 
     async def create_session(self, project_id: str, agent_id: str) -> str:
         """Create a new conversation session. Returns the session ID."""
-        session_id = f"psess_{uuid.uuid4().hex[:16]}"
+        session_id = gen_id("psess_", 16)
         logger.info(
             "Created provider session %s for agent %s",
             session_id, agent_id,

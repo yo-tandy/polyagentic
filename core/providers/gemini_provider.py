@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-import json
 import logging
-import os
-import time
-from pathlib import Path
+from typing import Any
 
-from core.providers.base import BaseProvider
-from core.subprocess_manager import SubprocessResult
+from core.providers.api_provider_base import APIProviderBase
 from core.providers.tool_executor import (
     ToolExecutor,
     build_tool_schemas_gemini,
@@ -17,13 +13,13 @@ from core.providers.tool_executor import (
 
 logger = logging.getLogger(__name__)
 
-# Model alias mapping: short names → full API model IDs
+# Model alias mapping: short names -> full API model IDs
 GEMINI_MODEL_MAP = {
     "gemini-2.5-pro": "gemini-2.5-pro",
     "gemini-2.5-flash": "gemini-2.5-flash",
     "gemini-2.0-flash": "gemini-2.0-flash",
     "gemini-2.0-flash-lite": "gemini-2.0-flash-lite",
-    # Default aliases — map generic names to sensible Gemini models
+    # Default aliases -- map generic names to sensible Gemini models
     "sonnet": "gemini-2.5-pro",
     "opus": "gemini-2.5-pro",
     "haiku": "gemini-2.0-flash-lite",
@@ -37,253 +33,164 @@ GEMINI_PRICING = {
     "gemini-2.0-flash-lite": (0.075, 0.30),
 }
 
-MAX_TOOL_LOOP_ITERATIONS = 25
 
-
-class GeminiProvider(BaseProvider):
+class GeminiProvider(APIProviderBase):
     """Google Gemini API provider with agentic tool-calling loop."""
 
-    def __init__(
-        self,
-        api_key: str | None = None,
-        history_repo=None,
-        project_id: str = "",
-        agent_id: str = "",
-    ):
-        self._api_key = api_key or os.environ.get("GOOGLE_API_KEY", "")
-        self._history_repo = history_repo
-        self._project_id = project_id
-        self._agent_id = agent_id
-        self._client = None  # Lazy init
+    PROVIDER_NAME = "Gemini"
+    MODEL_MAP = GEMINI_MODEL_MAP
+    PRICING = GEMINI_PRICING
+    DEFAULT_PRICING = (0.15, 0.60)
+    ENV_KEY = "GOOGLE_API_KEY"
 
-    def _get_client(self):
+    # -- Abstract method implementations --------------------------------
+
+    def _get_client(self) -> Any:
         if self._client is None:
             from google import genai
             self._client = genai.Client(api_key=self._api_key)
         return self._client
 
-    async def invoke(
+    def _build_tool_schemas(self, allowed_tools: str | None) -> list:
+        return build_tool_schemas_gemini(allowed_tools)
+
+    def _inject_system_prompt(
+        self, messages: list[dict], system_prompt: str | None,
+    ) -> None:
+        # Gemini passes system_instruction via the config, not in messages.
+        pass
+
+    async def _call_api(
         self,
-        prompt: str,
-        system_prompt: str | None = None,
-        model: str = "gemini-2.5-flash",
-        allowed_tools: str | None = None,
-        session_id: str | None = None,
-        working_dir: Path | None = None,
-        timeout: int = 300,
-        max_budget_usd: float | None = None,
-    ) -> SubprocessResult:
-        start_ms = time.monotonic_ns() // 1_000_000
-        resolved_model = GEMINI_MODEL_MAP.get(model, model)
-        tool_executor = ToolExecutor(working_dir) if working_dir else ToolExecutor()
+        client: Any,
+        model: str,
+        messages: list[dict],
+        system_prompt: str | None,
+        tools: list,
+    ) -> Any:
+        from google.genai import types
 
-        # Build tool schemas (Gemini format)
-        tool_declarations = build_tool_schemas_gemini(allowed_tools)
+        # Convert messages to Gemini content format
+        contents = self._build_gemini_contents(messages)
 
-        # Load or start conversation history
-        messages = []
-        new_session = False
-        if session_id and self._history_repo:
-            messages = await self._history_repo.get_history(session_id)
-        if not session_id and self._history_repo:
-            session_id = await self._history_repo.create_session(
-                self._project_id, self._agent_id,
+        # Build generation config
+        config_kwargs: dict[str, Any] = {}
+        if system_prompt:
+            config_kwargs["system_instruction"] = system_prompt
+        if tools:
+            config_kwargs["tools"] = [
+                types.Tool(function_declarations=[
+                    types.FunctionDeclaration(**decl)
+                    for decl in tools
+                ])
+            ]
+
+        config = types.GenerateContentConfig(**config_kwargs)
+
+        return await client.aio.models.generate_content(
+            model=model,
+            contents=contents,
+            config=config,
+        )
+
+    def _extract_tokens(self, response: Any) -> tuple[int, int]:
+        if response.usage_metadata:
+            return (
+                response.usage_metadata.prompt_token_count or 0,
+                response.usage_metadata.candidates_token_count or 0,
             )
-            new_session = True
+        return (0, 0)
 
-        # Append user message
-        messages.append({"role": "user", "content": prompt})
+    def _extract_tool_calls(self, response: Any) -> list:
+        function_calls = []
+        if response.candidates and response.candidates[0].content:
+            for part in response.candidates[0].content.parts:
+                if part.function_call:
+                    function_calls.append(part.function_call)
+        return function_calls
 
-        # Persist user message
+    def _extract_text(self, response: Any) -> str:
+        text_parts = []
+        if response.candidates and response.candidates[0].content:
+            for part in response.candidates[0].content.parts:
+                if part.text:
+                    text_parts.append(part.text)
+        return "\n".join(text_parts)
+
+    async def _execute_and_append_tool_results(
+        self,
+        messages: list[dict],
+        response: Any,
+        tool_executor: ToolExecutor,
+        tool_calls: list,
+        session_id: str | None,
+    ) -> None:
+        # Extract text parts from the response for the assistant message
+        text_parts = []
+        if response.candidates and response.candidates[0].content:
+            for part in response.candidates[0].content.parts:
+                if part.text:
+                    text_parts.append(part.text)
+
+        # Build the model's response as a message
+        messages.append({
+            "role": "assistant",
+            "content": "\n".join(text_parts) if text_parts else "",
+            "_function_calls": [
+                {"name": fc.name, "args": dict(fc.args) if fc.args else {}}
+                for fc in tool_calls
+            ],
+        })
+
+        # Persist assistant message with tool calls
         if self._history_repo and session_id:
             await self._history_repo.append(
                 session_id=session_id,
                 project_id=self._project_id,
                 agent_id=self._agent_id,
-                role="user",
-                content=prompt,
+                role="assistant",
+                content="\n".join(text_parts) if text_parts else "",
+                tool_calls=[
+                    {"name": fc.name, "input": dict(fc.args) if fc.args else {}}
+                    for fc in tool_calls
+                ],
             )
 
-        total_input_tokens = 0
-        total_output_tokens = 0
+        # Execute each tool and collect results
+        tool_results = []
+        for fc in tool_calls:
+            tool_name = fc.name
+            tool_args = dict(fc.args) if fc.args else {}
 
-        try:
-            client = self._get_client()
-            from google.genai import types
+            logger.info(
+                "Executing tool %s for agent %s",
+                tool_name, self._agent_id,
+            )
+            result = await tool_executor.execute(tool_name, tool_args)
+            tool_results.append({
+                "name": tool_name,
+                "result": result,
+            })
 
-            for iteration in range(MAX_TOOL_LOOP_ITERATIONS):
-                # Convert messages to Gemini content format
-                contents = self._build_gemini_contents(messages)
-
-                # Build generation config
-                config_kwargs: dict = {}
-                if system_prompt:
-                    config_kwargs["system_instruction"] = system_prompt
-                if tool_declarations:
-                    config_kwargs["tools"] = [
-                        types.Tool(function_declarations=[
-                            types.FunctionDeclaration(**decl)
-                            for decl in tool_declarations
-                        ])
-                    ]
-
-                config = types.GenerateContentConfig(**config_kwargs)
-
-                logger.info(
-                    "Gemini API call: model=%s, iteration=%d, messages=%d, tools=%d",
-                    resolved_model, iteration, len(messages), len(tool_declarations),
+            # Persist tool result
+            if self._history_repo and session_id:
+                await self._history_repo.append(
+                    session_id=session_id,
+                    project_id=self._project_id,
+                    agent_id=self._agent_id,
+                    role="user",
+                    content=result,
+                    tool_name=tool_name,
                 )
 
-                response = await client.aio.models.generate_content(
-                    model=resolved_model,
-                    contents=contents,
-                    config=config,
-                )
+        # Append function responses
+        messages.append({
+            "role": "tool",
+            "content": "",
+            "_function_responses": tool_results,
+        })
 
-                # Track tokens
-                if response.usage_metadata:
-                    total_input_tokens += response.usage_metadata.prompt_token_count or 0
-                    total_output_tokens += response.usage_metadata.candidates_token_count or 0
-
-                # Check for function calls
-                function_calls = []
-                text_parts = []
-                if response.candidates and response.candidates[0].content:
-                    for part in response.candidates[0].content.parts:
-                        if part.function_call:
-                            function_calls.append(part.function_call)
-                        elif part.text:
-                            text_parts.append(part.text)
-
-                if not function_calls:
-                    # No more tool calls — extract final text
-                    result_text = "\n".join(text_parts)
-
-                    # Persist assistant message
-                    if self._history_repo and session_id:
-                        await self._history_repo.append(
-                            session_id=session_id,
-                            project_id=self._project_id,
-                            agent_id=self._agent_id,
-                            role="assistant",
-                            content=result_text,
-                        )
-
-                    duration_ms = (time.monotonic_ns() // 1_000_000) - start_ms
-                    cost = self._estimate_cost(
-                        resolved_model, total_input_tokens, total_output_tokens,
-                    )
-
-                    return SubprocessResult(
-                        result_text=result_text,
-                        session_id=session_id,
-                        cost_usd=cost,
-                        duration_ms=duration_ms,
-                        input_tokens=total_input_tokens,
-                        output_tokens=total_output_tokens,
-                        is_error=False,
-                    )
-
-                # Function calls present — execute them
-                # Build the model's response as a message
-                assistant_parts = []
-                for text in text_parts:
-                    assistant_parts.append({"type": "text", "text": text})
-                for fc in function_calls:
-                    assistant_parts.append({
-                        "type": "function_call",
-                        "name": fc.name,
-                        "args": dict(fc.args) if fc.args else {},
-                    })
-
-                messages.append({
-                    "role": "assistant",
-                    "content": "\n".join(text_parts) if text_parts else "",
-                    "_function_calls": [
-                        {"name": fc.name, "args": dict(fc.args) if fc.args else {}}
-                        for fc in function_calls
-                    ],
-                })
-
-                # Persist assistant message with tool calls
-                if self._history_repo and session_id:
-                    await self._history_repo.append(
-                        session_id=session_id,
-                        project_id=self._project_id,
-                        agent_id=self._agent_id,
-                        role="assistant",
-                        content="\n".join(text_parts) if text_parts else "",
-                        tool_calls=[
-                            {"name": fc.name, "input": dict(fc.args) if fc.args else {}}
-                            for fc in function_calls
-                        ],
-                    )
-
-                # Execute each tool and collect results
-                tool_results = []
-                for fc in function_calls:
-                    tool_name = fc.name
-                    tool_args = dict(fc.args) if fc.args else {}
-
-                    logger.info(
-                        "Executing tool %s for agent %s",
-                        tool_name, self._agent_id,
-                    )
-                    result = await tool_executor.execute(tool_name, tool_args)
-                    tool_results.append({
-                        "name": tool_name,
-                        "result": result,
-                    })
-
-                    # Persist tool result
-                    if self._history_repo and session_id:
-                        await self._history_repo.append(
-                            session_id=session_id,
-                            project_id=self._project_id,
-                            agent_id=self._agent_id,
-                            role="user",
-                            content=result,
-                            tool_name=tool_name,
-                        )
-
-                # Append function responses
-                messages.append({
-                    "role": "tool",
-                    "content": "",
-                    "_function_responses": tool_results,
-                })
-
-            # Exceeded max iterations
-            duration_ms = (time.monotonic_ns() // 1_000_000) - start_ms
-            return SubprocessResult(
-                result_text="[ERROR] Max tool loop iterations exceeded",
-                session_id=session_id,
-                cost_usd=self._estimate_cost(
-                    resolved_model, total_input_tokens, total_output_tokens,
-                ),
-                duration_ms=duration_ms,
-                input_tokens=total_input_tokens,
-                output_tokens=total_output_tokens,
-                is_error=True,
-            )
-
-        except Exception as e:
-            duration_ms = (time.monotonic_ns() // 1_000_000) - start_ms
-            logger.error("Gemini API error for agent %s: %s", self._agent_id, e)
-            return SubprocessResult(
-                result_text=f"[ERROR] Gemini API: {e}",
-                session_id=session_id,
-                cost_usd=self._estimate_cost(
-                    resolved_model, total_input_tokens, total_output_tokens,
-                ),
-                duration_ms=duration_ms,
-                input_tokens=total_input_tokens,
-                output_tokens=total_output_tokens,
-                is_error=True,
-            )
-
-    def supports_resume(self) -> bool:
-        return False
+    # -- Gemini-specific helpers ----------------------------------------
 
     @staticmethod
     def _build_gemini_contents(messages: list[dict]) -> list:
@@ -329,13 +236,3 @@ class GeminiProvider(BaseProvider):
                 ))
 
         return contents
-
-    @staticmethod
-    def _estimate_cost(
-        model: str, input_tokens: int, output_tokens: int,
-    ) -> float:
-        """Estimate cost based on published pricing."""
-        prices = GEMINI_PRICING.get(model, (0.15, 0.60))
-        input_cost = (input_tokens / 1_000_000) * prices[0]
-        output_cost = (output_tokens / 1_000_000) * prices[1]
-        return round(input_cost + output_cost, 6)

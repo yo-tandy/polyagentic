@@ -13,6 +13,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse
 
+from core.constants import JWT_REFRESH_WINDOW_SECONDS
 from web.auth import decode_jwt, create_jwt, set_auth_cookie, _get_jwt_secret
 
 logger = logging.getLogger(__name__)
@@ -20,12 +21,13 @@ logger = logging.getLogger(__name__)
 # Paths that never require auth
 PUBLIC_PREFIXES = ("/auth/", "/static/")
 
-# Anonymous user context when auth is disabled
+# Anonymous user context when auth is disabled (gets admin role since auth is off)
 ANONYMOUS_USER = {
     "id": "anonymous",
     "org_id": "default",
     "email": "anonymous@local",
     "name": "Anonymous",
+    "role": "admin",
 }
 
 
@@ -71,25 +73,27 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if not payload:
             return self._unauthorized(request)
 
-        # Set user context
+        # Set user context (role defaults to "member" for legacy tokens)
         request.state.user = {
             "id": payload["sub"],
             "org_id": payload["org_id"],
             "email": payload["email"],
             "name": payload["name"],
+            "role": payload.get("role", "admin"),
         }
 
         response = await call_next(request)
 
-        # Sliding window refresh: re-issue JWT if < 15min remaining
+        # Sliding window refresh: re-issue JWT if within refresh window
         exp = payload.get("exp", 0)
-        if exp - time.time() < 900:
+        if exp - time.time() < JWT_REFRESH_WINDOW_SECONDS:
             new_token = create_jwt(
                 payload["sub"], payload["org_id"],
                 payload["email"], payload["name"],
                 jwt_secret,
+                role=payload.get("role", "admin"),
             )
-            set_auth_cookie(response, new_token)
+            set_auth_cookie(response, new_token, request=request)
 
         return response
 

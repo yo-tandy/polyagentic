@@ -3,20 +3,16 @@
 from __future__ import annotations
 
 import logging
-import uuid
 from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import select, delete
 
+from core.constants import gen_id
 from db.models.knowledge import Document, DocumentComment
 from db.repositories.base import BaseRepository
 
 logger = logging.getLogger(__name__)
-
-
-def _gen_id(prefix: str) -> str:
-    return f"{prefix}-{uuid.uuid4().hex[:8]}"
 
 
 class KnowledgeRepository(BaseRepository):
@@ -40,7 +36,7 @@ class KnowledgeRepository(BaseRepository):
         async with self._session() as session:
             slug = title.lower().replace(" ", "-")[:60]
             doc = Document(
-                id=_gen_id("doc"),
+                id=gen_id("doc-", 8),
                 project_id=project_id,
                 tenant_id=tenant_id,
                 title=title,
@@ -116,7 +112,7 @@ class KnowledgeRepository(BaseRepository):
             if not doc:
                 return None
             comment = DocumentComment(
-                id=_gen_id("cmt"),
+                id=gen_id("cmt-", 8),
                 doc_id=doc_id,
                 highlighted_text=highlighted_text,
                 element_index=element_index,

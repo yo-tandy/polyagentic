@@ -19,12 +19,10 @@ async def websocket_endpoint(websocket: WebSocket):
             auth_enabled = auth_enabled.lower() in ("true", "1", "yes")
 
     if auth_enabled:
-        # Authenticate via cookie (sent on WebSocket upgrade)
+        # Authenticate via cookie (sent on WebSocket upgrade).
+        # Query-param tokens are intentionally NOT supported — they leak
+        # in logs, browser history, and proxy referrer headers.
         token = websocket.cookies.get("session_token")
-        if not token:
-            # Fallback: query param for non-browser clients
-            token = websocket.query_params.get("token")
-
         if not token:
             await websocket.close(code=4001, reason="Not authenticated")
             return

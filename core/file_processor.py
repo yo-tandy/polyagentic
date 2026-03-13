@@ -6,10 +6,11 @@ import logging
 from pathlib import Path
 from typing import NamedTuple
 
+from core.constants import ALLOWED_FILE_EXTENSIONS, MAX_FILE_SIZE
+
 logger = logging.getLogger(__name__)
 
-MAX_FILE_SIZE = 20 * 1024 * 1024  # 20MB
-ALLOWED_EXTENSIONS = {".pdf", ".docx", ".txt", ".md", ".png", ".jpg", ".jpeg"}
+ALLOWED_EXTENSIONS = ALLOWED_FILE_EXTENSIONS
 TEXT_EXTENSIONS = {".txt", ".md"}
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
 

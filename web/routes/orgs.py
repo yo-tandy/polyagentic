@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import secrets
-import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+
+from core.constants import gen_id
 
 router = APIRouter()
 
@@ -88,7 +89,7 @@ async def create_invite(body: CreateInviteRequest, request: Request):
     user = _get_user(request)
     org_id = _get_org_id(request)
 
-    invite_id = f"inv_{uuid.uuid4().hex[:12]}"
+    invite_id = gen_id("inv_")
     token = secrets.token_urlsafe(32)
     expires_at = None
     if body.expires_in_days:

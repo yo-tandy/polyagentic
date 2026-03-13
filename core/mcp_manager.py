@@ -15,6 +15,8 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from core.constants import MCP_PACKAGE_NAME_PATTERN
+
 if TYPE_CHECKING:
     from core.container_manager import ContainerManager
     from core.session_store import SessionStore
@@ -107,15 +109,23 @@ class MCPManager:
             package = server.package_name
             install_method = server.install_method or "npx"
 
-            if install_method == "npx":
-                install_cmd = f"npm install -g {package}"
-            elif install_method == "uvx":
-                install_cmd = f"pip install {package}"
+            # Validate package name to prevent command injection
+            if not package or not MCP_PACKAGE_NAME_PATTERN.match(package):
+                logger.error("Invalid MCP package name rejected: %r", package)
+                await self._repo.update_status(
+                    server_db_id, "failed",
+                    error_message=f"Invalid package name: {package!r}",
+                )
+                return False
+
+            # Use list-form subprocess (no shell) to avoid injection
+            if install_method == "uvx":
+                install_args = ["pip", "install", package]
             else:
-                install_cmd = f"npm install -g {package}"
+                install_args = ["npm", "install", "-g", package]
 
             proc = await asyncio.create_subprocess_exec(
-                "docker", "exec", container_name, "sh", "-c", install_cmd,
+                "docker", "exec", container_name, *install_args,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )

@@ -14,6 +14,8 @@ from core.subprocess_manager import SubprocessManager, DockerSubprocessManager
 from core.providers.base import BaseProvider
 from core.providers.claude_cli_provider import ClaudeCLIProvider
 from core.session_store import SessionStore
+from core.prompt_builder import PromptBuilder
+from core.action_handler import ActionHandler
 from config import DEFAULT_MODEL, CLAUDE_ALLOWED_TOOLS_DEV
 
 from core.task import TaskStatus
@@ -120,6 +122,10 @@ class Agent:
         self._running = False
         self._current_task_plan: str | None = None  # plan text for current task
 
+        # Delegate objects (created lazily in configure())
+        self._prompt_builder: PromptBuilder | None = None
+        self._action_handler: ActionHandler | None = None
+
     @property
     def inbox_dir(self) -> Path:
         return self.messages_dir / self.agent_id / "inbox"
@@ -148,9 +154,52 @@ class Agent:
         self._action_registry = action_registry
         self._phase_board = phase_board
 
+        # Build delegate objects now that dependencies are available
+        self._prompt_builder = PromptBuilder(
+            agent_id=self.agent_id,
+            prompt_template=self._prompt_template,
+            memory_manager=memory_manager,
+            knowledge_base=knowledge_base,
+            task_board=task_board,
+            session_store=session_store,
+            phase_board=phase_board,
+            get_known_actions_fn=self._get_known_actions,
+            max_task_context_items=self.max_task_context_items,
+            other_agents_max_tasks=self.max_task_context_items,
+            mcp_config_path_fn=lambda: self.mcp_config_path,
+        )
+        # Sync mutable state from Agent into PromptBuilder
+        self._prompt_builder.system_prompt = self.system_prompt
+        self._prompt_builder._team_roster = self._team_roster
+        self._prompt_builder._team_roles = self._team_roles
+        self._prompt_builder._routing_guide = self._routing_guide
+        self._prompt_builder._stateless = self._stateless
+        self._prompt_builder._use_session = self.use_session
+
+        self._action_handler = ActionHandler(
+            agent_id=self.agent_id,
+            agent_name=self.name,
+            action_registry=action_registry,
+            memory_manager=memory_manager,
+            knowledge_base=knowledge_base,
+            task_board=task_board,
+            conversation_manager=conversation_manager,
+            broker=broker,
+            session_store=session_store,
+            provider=self._provider,
+            user_facing_agent=self._user_facing_agent,
+            allowed_actions=self._allowed_actions,
+            get_known_actions_fn=self._get_known_actions,
+        )
+        # Back-reference so ActionHandler can pass `self` (the Agent) to
+        # ActionRegistry.execute_all which expects an Agent instance.
+        self._action_handler._agent_ref = self
+
     def set_provider(self, provider: BaseProvider) -> None:
-        """Swap the AI model provider (e.g. Claude CLI → OpenAI API)."""
+        """Swap the AI model provider (e.g. Claude CLI -> OpenAI API)."""
         self._provider = provider
+        if self._action_handler:
+            self._action_handler._set_provider(provider)
 
     async def start(self):
         self.inbox_dir.mkdir(parents=True, exist_ok=True)
@@ -198,7 +247,7 @@ class Agent:
                 await asyncio.sleep(1.0)
 
             # Session kill: invalidate dead session so next invoke creates a fresh one
-            # (preserves accumulated stats — only the session ID is cleared)
+            # (preserves accumulated stats -- only the session ID is cleared)
             if (self.use_session and self._session_store
                     and self._session_store.is_killed(self.agent_id)):
                 await self._session_store.invalidate_session(self.agent_id)
@@ -284,7 +333,7 @@ class Agent:
 
                 # Auto-close enforcement: if agent processed a TASK message
                 # but didn't explicitly update the task status, auto-close it.
-                # Delegation is NOT a reason to skip — delegated subtasks are
+                # Delegation is NOT a reason to skip -- delegated subtasks are
                 # tracked independently; the delegating agent's own task is done.
                 if (msg.type == MessageType.TASK and msg.task_id
                         and self._task_board):
@@ -294,11 +343,11 @@ class Agent:
                         # If so, send the task back to PENDING for retry instead
                         # of marking it DONE with an error as the "summary".
                         is_error_response = any(
-                            r.content and r.content.startswith("⚠️") for r in responses
+                            r.content and r.content.startswith("\u26a0\ufe0f") for r in responses
                         )
                         if is_error_response:
                             error_text = next(
-                                (r.content for r in responses if r.content and r.content.startswith("⚠️")), ""
+                                (r.content for r in responses if r.content and r.content.startswith("\u26a0\ufe0f")), ""
                             )
                             await self._task_board.update_task(
                                 msg.task_id,
@@ -387,6 +436,8 @@ class Agent:
             finally:
                 self.current_task_id = None
                 self._current_task_plan = None
+                if self._action_handler:
+                    self._action_handler.current_task_id = None
                 self.messages_processed += 1
                 if self.status not in (AgentStatus.ERROR, AgentStatus.SESSION_PAUSED):
                     self.status = AgentStatus.IDLE
@@ -430,6 +481,8 @@ class Agent:
             return
 
         self._current_task_plan = plan_text
+        if self._prompt_builder:
+            self._prompt_builder._current_task_plan = plan_text
         await self._task_board.update_task(
             task.id,
             _agent_id=self.agent_id,
@@ -443,7 +496,7 @@ class Agent:
     async def process_message(self, msg: Message) -> list[Message]:
         prompt = await self._build_prompt(msg)
 
-        # Get system prompt first — may clear a stale session (prompt-hash mismatch)
+        # Get system prompt first -- may clear a stale session (prompt-hash mismatch)
         system_prompt = await self._get_system_prompt_if_first_call()
 
         # Fetch session_id AFTER prompt check (it may have been cleared above)
@@ -525,78 +578,19 @@ class Agent:
                 sender=self.agent_id,
                 recipient="user",
                 type=MessageType.CHAT,
-                content=f"⚠️ {self.name} error: {result.result_text}",
+                content=f"\u26a0\ufe0f {self.name} error: {result.result_text}",
                 task_id=msg.task_id,
                 parent_message_id=msg.id,
             )]
 
-        # Validate actions — retry once if agent used unknown action names
+        # Validate actions -- retry once if agent used unknown action names
         validated_text = await self._validate_result_actions(result.result_text)
 
         return await self._parse_response(validated_text, msg)
 
-    async def _validate_result_actions(self, result_text: str) -> str:
-        """Check for unknown action types in the result; retry once with correction.
-
-        If the agent emitted action blocks with unrecognized names (after
-        normalization), send a correction prompt asking it to re-emit with
-        valid action names.  Returns corrected text, or original if no
-        unknown actions or retry fails.
-        """
-        actions = self._extract_actions(result_text)
-        if not actions:
-            return result_text
-
-        known = self._get_known_actions()
-        unknown = [a.get("action") for a in actions if a.get("action") not in known]
-        if not unknown:
-            return result_text
-
-        logger.warning(
-            "Agent %s used unknown action(s): %s — requesting correction",
-            self.agent_id, unknown,
-        )
-
-        valid_list = ", ".join(sorted(known))
-        correction = (
-            f"Your previous response contained unrecognized action(s): {', '.join(unknown)}. "
-            f"These are NOT valid actions and will be ignored.\n"
-            f"Valid actions are: {valid_list}.\n"
-            f"Please re-emit your response using only valid action names from the list above."
-        )
-
-        session_id = self._session_store.get(self.agent_id) if self._session_store else None
-        retry = await self._provider.invoke(
-            prompt=correction,
-            system_prompt=self._get_session_reminder(),
-            model=self.model,
-            allowed_tools=self.allowed_tools,
-            session_id=session_id,
-            working_dir=self.working_dir,
-            timeout=self.timeout,
-            mcp_config_path=self.mcp_config_path,
-        )
-
-        # Record retry stats
-        if self._session_store:
-            await self._session_store.record_request(
-                self.agent_id,
-                duration_ms=retry.duration_ms or 0,
-                is_error=retry.is_error,
-                cost_usd=retry.cost_usd or 0.0,
-                input_tokens=retry.input_tokens or 0,
-                output_tokens=retry.output_tokens or 0,
-            )
-
-        if retry.is_error:
-            logger.warning(
-                "Agent %s action validation retry failed: %s",
-                self.agent_id, retry.result_text[:200],
-            )
-            return result_text  # Keep original if retry fails
-
-        logger.info("Agent %s action validation retry succeeded", self.agent_id)
-        return retry.result_text
+    # ------------------------------------------------------------------
+    # Delegation to PromptBuilder
+    # ------------------------------------------------------------------
 
     def _render_prompt_template(
         self,
@@ -605,11 +599,12 @@ class Agent:
         team_roles: str = "",
         routing_guide: str = "",
     ) -> str:
-        """Replace standard template variables in a prompt string.
-
-        Uses cached (sync) memory so this method stays sync-safe.
-        Full async memory is injected by ``_build_full_system_prompt``.
-        """
+        """Replace standard template variables in a prompt string."""
+        if self._prompt_builder:
+            return self._prompt_builder._render_prompt_template(
+                template, roster, team_roles=team_roles, routing_guide=routing_guide,
+            )
+        # Fallback (before configure)
         prompt = template.replace("{team_roster}", roster)
         prompt = prompt.replace("{team_roles}", team_roles)
         prompt = prompt.replace("{routing_guide}", routing_guide)
@@ -620,11 +615,7 @@ class Agent:
         return prompt
 
     def _get_known_actions(self) -> set[str]:
-        """Return the set of valid action names for this agent.
-
-        Uses agent-side permissions (``_allowed_actions``) when set;
-        falls back to the action registry or class-level ``KNOWN_ACTIONS``.
-        """
+        """Return the set of valid action names for this agent."""
         if self._allowed_actions is not None:
             return self._allowed_actions
         if self._action_registry:
@@ -632,11 +623,9 @@ class Agent:
         return self.KNOWN_ACTIONS
 
     def _get_session_reminder(self) -> str:
-        """Build a compact reminder for resumed sessions.
-
-        Includes the full list of valid action names so Claude doesn't
-        hallucinate wrong action names in long-running sessions.
-        """
+        """Build a compact reminder for resumed sessions."""
+        if self._prompt_builder:
+            return self._prompt_builder._get_session_reminder()
         actions = ", ".join(sorted(self._get_known_actions()))
         return (
             "CRITICAL PROTOCOL REMINDER: All outputs MUST use ```action fenced blocks. "
@@ -648,51 +637,20 @@ class Agent:
         )
 
     async def _get_system_prompt_if_first_call(self) -> str | None:
-        if self._stateless:
-            # Stateless agent — always re-render and send full system prompt
-            self.system_prompt = self._render_prompt_template(
-                self._prompt_template,
-                self._team_roster or "",
-                team_roles=self._team_roles or "",
-                routing_guide=self._routing_guide or "",
-            )
-            prompt = await self._build_full_system_prompt()
-            return prompt
-
-        prompt = await self._build_full_system_prompt()
-        if self.use_session and self._session_store and self._session_store.get(self.agent_id):
-            # Check if system prompt has changed since session was created
-            current_hash = hashlib.md5(prompt.encode()).hexdigest()[:12]
-            stored_hash = self._session_store.get_prompt_hash(self.agent_id)
-            if stored_hash and current_hash == stored_hash:
-                # Prompt unchanged — append a compact reminder to the resumed session
-                # (subprocess_manager will use --append-system-prompt)
-                return self._get_session_reminder()
-            # Prompt changed — invalidate stale session so Claude gets the new prompt
-            # (preserves accumulated stats — only the session ID is cleared)
-            logger.info(
-                "Agent %s prompt changed (hash %s → %s), invalidating session",
-                self.agent_id, stored_hash, current_hash,
-            )
-            await self._session_store.invalidate_session(self.agent_id)
-        return prompt
-
-    def update_team_roster(self, roster_text: str, team_roles: str = "", routing_guide: str = ""):
-        """Re-render system prompt with updated team roster.
-
-        This is the canonical implementation — subclasses no longer need
-        their own version.
-        """
-        self._team_roster = roster_text
-        self._team_roles = team_roles
-        self._routing_guide = routing_guide
-        self.system_prompt = self._render_prompt_template(
-            self._prompt_template, roster_text,
-            team_roles=team_roles, routing_guide=routing_guide,
-        )
+        if self._prompt_builder:
+            result = await self._prompt_builder._get_system_prompt_if_first_call()
+            # Sync system_prompt back in case stateless mode re-rendered it
+            self.system_prompt = self._prompt_builder.system_prompt
+            return result
+        # Fallback (before configure -- should not normally happen)
+        return await self._build_full_system_prompt()
 
     async def _build_full_system_prompt(self) -> str:
         """Build the complete system prompt including memory."""
+        if self._prompt_builder:
+            # Sync current system_prompt into builder before building
+            self._prompt_builder.system_prompt = self.system_prompt
+            return await self._prompt_builder._build_full_system_prompt()
         prompt = self.system_prompt
         if self._memory_manager:
             memory = await self._memory_manager.get_combined_memory(self.agent_id)
@@ -701,595 +659,154 @@ class Agent:
         return prompt
 
     async def _build_prompt(self, msg: Message) -> str:
-        parts = []
-
-        # 1. Memory context (for resumed sessions — first-call memory is in system prompt)
-        if self._memory_manager and self.use_session:
-            session_id = self._session_store.get(self.agent_id) if self._session_store else None
-            if session_id:  # Resumed session — memory not in system prompt
-                memory = await self._memory_manager.get_combined_memory(self.agent_id)
-                if memory:
-                    parts.append(f"[Your Memory]\n{memory}\n---")
-
-        # 2. Knowledge base index
-        if self._knowledge_base:
-            kb_summary = self._knowledge_base.get_index_summary()
-            if kb_summary:
-                parts.append(f"[Project Knowledge Base]\n{kb_summary}\n---")
-
-        # 3. Task board summary
-        if self._task_board:
-            task_ctx = self._build_task_context()
-            if task_ctx:
-                parts.append(f"[Current Task Board]\n{task_ctx}\n---")
-
-        # 3b. Active plan for current task
-        if self._current_task_plan and msg.task_id:
-            parts.append(f"[Your Plan for This Task]\n{self._current_task_plan}\n---")
-
-        # 3c. Connected MCP servers
-        if self.mcp_config_path and self.mcp_config_path.exists():
-            try:
-                import json as _json
-                mcp_data = _json.loads(self.mcp_config_path.read_text())
-                server_names = list(mcp_data.get("mcpServers", {}).keys())
-                if server_names:
-                    parts.append(f"[Connected MCP Servers: {', '.join(server_names)}]\n---")
-            except Exception:
-                pass
-
-        # 4. Original message
-        parts.append(f"[Message from {msg.sender}]")
+        if self._prompt_builder:
+            return await self._prompt_builder._build_prompt(msg)
+        # Fallback (before configure)
+        parts = [f"[Message from {msg.sender}]"]
         parts.append(f"Type: {msg.type.value}")
         if msg.task_id:
             parts.append(f"Task ID: {msg.task_id}")
         parts.append(f"\n{msg.content}")
-
         if msg.metadata:
             parts.append(f"\nMetadata: {msg.metadata}")
-
         return "\n".join(parts)
+
+    def _build_task_context(self) -> str:
+        """Build task board summary, emphasising this agent's tasks."""
+        if self._prompt_builder:
+            return self._prompt_builder._build_task_context()
+        return ""
 
     @staticmethod
     def _compute_velocity(tasks) -> dict:
         """Compute per-agent velocity from completed tasks with timing data."""
-        from datetime import datetime as _dt
-        velocity: dict[str, dict] = {}
-        for t in tasks:
-            if t.status != TaskStatus.DONE or not t.completed_at or not t.estimate or not t.assignee or not t.started_at:
-                continue
-            try:
-                started = _dt.fromisoformat(t.started_at)
-                completed = _dt.fromisoformat(t.completed_at)
-                dur_min = (completed - started).total_seconds() / 60
-                if dur_min <= 0:
-                    continue
-            except (ValueError, TypeError):
-                continue
-            if t.assignee not in velocity:
-                velocity[t.assignee] = {"points": 0, "total_min": 0, "tasks": 0}
-            velocity[t.assignee]["points"] += t.estimate
-            velocity[t.assignee]["total_min"] += dur_min
-            velocity[t.assignee]["tasks"] += 1
-        return velocity
+        return PromptBuilder._compute_velocity(tasks)
 
-    def _build_task_context(self) -> str:
-        """Build task board summary, emphasising this agent's tasks."""
-        tasks = self._task_board.get_all_tasks()
-        if not tasks:
-            return ""
-
-        my_tasks = self._task_board.get_tasks_for_agent(self.agent_id)
-        my_task_ids = {t.id for t in my_tasks}
-        other_tasks = [t for t in tasks if t.id not in my_task_ids]
-
-        lines = []
-
-        # Phase context
-        if self._phase_board:
-            phases = self._phase_board.get_all_phases()
-            if phases:
-                current = self._phase_board.get_current_phase()
-                lines.append("PROJECT PHASES:")
-                for p in phases:
-                    marker = " [CURRENT]" if (current and p["id"] == current["id"]) else ""
-                    lines.append(f"  - {p['name']} ({p['status']}){marker}")
-                lines.append("")
-        if my_tasks:
-            lines.append("YOUR TASKS (ordered by priority — review tasks first):")
-            for t in my_tasks:
-                review_marker = " [NEEDS YOUR REVIEW]" if (t.status == TaskStatus.REVIEW and t.reviewer == self.agent_id) else ""
-                est = f" [{t.estimate}sp]" if t.estimate else ""
-                lines.append(f"  - [P{t.priority}] [{t.status.value}]{est} {t.title} (id: {t.id}){review_marker}")
-
-        if other_tasks:
-            limit = self.max_task_context_items
-            if limit is None:
-                shown = other_tasks
-            else:
-                shown = other_tasks[:max(0, limit - len(my_tasks))]
-            lines.append("\nOTHER TEAM TASKS:")
-            for t in shown:
-                assignee = t.assignee or "unassigned"
-                est = f" [{t.estimate}sp]" if t.estimate else ""
-                lines.append(f"  - [P{t.priority}] [{t.status.value}]{est} {t.title} (id: {t.id}, assignee: {assignee})")
-            if len(other_tasks) > len(shown):
-                lines.append(f"  ... and {len(other_tasks) - len(shown)} more")
-
-        # Velocity data for management agents
-        if self.max_task_context_items is None:
-            velocity = self._compute_velocity(tasks)
-            if velocity:
-                lines.append("\nVELOCITY DATA (completed tasks):")
-                for aid, data in sorted(velocity.items()):
-                    pts_per_30 = round(30 / (data["total_min"] / data["points"]), 1) if data["points"] and data["total_min"] > 0 else "N/A"
-                    lines.append(
-                        f"  {aid}: {data['points']}sp in {data['total_min']:.0f}min "
-                        f"({data['tasks']} tasks) => ~{pts_per_30}sp/30min"
-                    )
-
-        lines.append("")
-        lines.append(
-            "NOTE: When asked for a status update, report ONLY on YOUR TASKS above. "
-            "Other team tasks are shown for coordination context only — do not report "
-            "on work done by other agents unless you directly manage them.\n\n"
-            "IMPORTANT: A status update request is also a nudge to take action. "
-            "After giving your update, check your task list:\n"
-            "1. If you have IN-PROGRESS tasks you are not actively working on — "
-            "resume working on them immediately.\n"
-            "2. If you have no in-progress tasks but have PENDING tasks assigned to you — "
-            "pick the highest-priority one, move it to in-progress, and start working on it.\n"
-            "Do not just report status — take action on your tasks."
-        )
-
-        return "\n".join(lines)
+    # ------------------------------------------------------------------
+    # Delegation to ActionHandler
+    # ------------------------------------------------------------------
 
     async def _parse_response(self, result_text: str, original_msg: Message) -> list[Message]:
-        """Central response parser — dispatches all actions via the registry.
+        """Central response parser -- dispatches all actions via the registry."""
+        if self._action_handler:
+            # Keep current_task_id in sync
+            self._action_handler.current_task_id = self.current_task_id
+            return await self._action_handler._parse_response(result_text, original_msg)
+        # Fallback (before configure)
+        return [Message(
+            sender=self.agent_id,
+            recipient=original_msg.sender,
+            type=MessageType.RESPONSE,
+            content=result_text,
+            task_id=original_msg.task_id,
+            parent_message_id=original_msg.id,
+        )]
 
-        Replaces per-agent ``_parse_response`` overrides and the old
-        ``_handle_common_actions`` method.  Every action (messaging,
-        documents, memory, git, etc.) is handled through the registry.
-        """
-        actions = self._extract_actions(result_text)
-
-        if not actions:
-            # No action blocks found — sanitize and forward raw text
-            cleaned = self._sanitize_for_user(result_text)
-            if not cleaned.strip():
-                cleaned = result_text  # keep raw if sanitization removes everything
-            if cleaned.strip():
-                return [Message(
-                    sender=self.agent_id,
-                    recipient=original_msg.sender,
-                    type=MessageType.RESPONSE,
-                    content=cleaned,
-                    task_id=original_msg.task_id,
-                    parent_message_id=original_msg.id,
-                )]
-            return []
-
-        # Dispatch through the action registry
-        if self._action_registry:
-            messages = await self._action_registry.execute_all(
-                self, actions, original_msg,
+    async def _validate_result_actions(self, result_text: str) -> str:
+        """Check for unknown action types; retry once with correction."""
+        if self._action_handler:
+            return await self._action_handler._validate_result_actions(
+                result_text,
+                model=self.model,
+                allowed_tools=self.allowed_tools,
+                working_dir=self.working_dir,
+                timeout=self.timeout,
+                mcp_config_path=self.mcp_config_path,
+                get_session_reminder_fn=self._get_session_reminder,
             )
-        else:
-            # Fallback: no registry — just return sanitized text
-            logger.warning(
-                "Agent %s has no action registry — cannot process actions",
-                self.agent_id,
-            )
-            messages = []
+        return result_text
 
-        # Fallback: if actions were processed but no messages generated,
-        # send sanitized text (if any human-readable content remains)
-        if not messages:
-            cleaned = self._sanitize_for_user(result_text)
-            if cleaned.strip():
-                messages.append(Message(
-                    sender=self.agent_id,
-                    recipient=original_msg.sender,
-                    type=MessageType.RESPONSE,
-                    content=cleaned,
-                    task_id=original_msg.task_id,
-                    parent_message_id=original_msg.id,
-                ))
-
-        return messages
-
-    # ── Shared action extraction (used by subclasses) ──
-
-    # Maps wrong top-level keys to correct ones
-    _ACTION_KEY_MAP = {"tool": "action"}
-
-    # Maps wrong action names to correct ones
-    _ACTION_NAME_MAP = {
-        "save_to_memory": "update_memory",
-        "save_memory": "update_memory",
-        "memory": "update_memory",
-        "respond": "respond_to_user",
-        "reply": "respond_to_user",
-        "send_message": "respond_to_user",
-        "assign": "delegate",
-        "assign_task": "delegate",
-        "resolve_comment": "resolve_comments",
-        "conversation_summary": "end_conversation",
-        "close_conversation": "end_conversation",
-        "finish_conversation": "end_conversation",
-        "summarize_conversation": "end_conversation",
-    }
-
-    # Maps wrong field names to correct ones, per action type
-    _FIELD_MAP = {
-        "delegate": {
-            "message": "task_description",
-            "description": "task_description",
-            "content": "task_description",
-            "target": "to",
-            "agent": "to",
-            "title": "task_title",
-        },
-        "respond_to_user": {
-            "content": "message",
-            "text": "message",
-            "response": "message",
-        },
-        "update_memory": {
-            "value": "content",
-            "text": "content",
-            "key": "memory_type",
-        },
-        "write_document": {
-            "path": "title",
-            "name": "title",
-            "filename": "title",
-            "type": "category",
-        },
-        "resolve_comments": {
-            "comments": "resolutions",
-            "results": "resolutions",
-        },
-        "assign_ticket": {
-            "message": "task_description",
-            "description": "task_description",
-            "content": "task_description",
-            "target": "to",
-            "agent": "to",
-            "title": "task_title",
-        },
-    }
+    def _extract_actions(self, text: str) -> list[dict]:
+        """Extract action blocks from Claude output."""
+        if self._action_handler:
+            return self._action_handler._extract_actions(text)
+        return []
 
     def _normalize_action(self, raw: dict) -> dict:
         """Normalize common wrong key/value patterns in a parsed action."""
-        result = dict(raw)
-
-        # Remap top-level keys (e.g. "tool" → "action")
-        for wrong, right in self._ACTION_KEY_MAP.items():
-            if wrong in result and right not in result:
-                result[right] = result.pop(wrong)
-
-        # Remap action names (e.g. "save_to_memory" → "update_memory")
-        action_name = result.get("action", "")
-        if action_name in self._ACTION_NAME_MAP:
-            result["action"] = self._ACTION_NAME_MAP[action_name]
-
-        # Remap field names per action type
-        action_type = result.get("action", "")
-        field_map = self._FIELD_MAP.get(action_type, {})
-        for wrong, right in field_map.items():
-            if wrong in result and right not in result:
-                result[right] = result.pop(wrong)
-
-        # Normalize agent references: lowercase "to" field
-        if "to" in result and isinstance(result["to"], str):
-            result["to"] = result["to"].lower().replace(" ", "_")
-
-        return result
-
-    def _extract_actions(self, text: str) -> list[dict]:
-        """Extract action blocks from Claude output.
-
-        Primary: looks for ```action ... ``` fenced blocks.
-        Fallback: recovers bare JSON objects containing "action" or "tool" keys.
-        All parsed actions are normalized via _normalize_action().
-        """
-        actions = []
-
-        # Primary: fenced action blocks
-        pattern = r"```action\s*(.*?)\s*```"
-        for match in re.findall(pattern, text, re.DOTALL):
-            try:
-                parsed = json.loads(match.strip())
-                actions.append(self._normalize_action(parsed))
-            except json.JSONDecodeError:
-                logger.warning("Failed to parse action block: %s", match[:100])
-
-        if actions:
-            return actions
-
-        # Fallback: bare JSON objects with "action" or "tool" key
-        bare_pattern = r'(?<!`)\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}'
-        for match in re.findall(bare_pattern, text):
-            try:
-                parsed = json.loads(match.strip())
-                if isinstance(parsed, dict) and ("action" in parsed or "tool" in parsed):
-                    actions.append(self._normalize_action(parsed))
-            except (json.JSONDecodeError, ValueError):
-                continue
-
-        if actions:
-            logger.warning(
-                "Agent %s: recovered %d bare JSON action(s) (no fenced blocks found)",
-                self.agent_id, len(actions),
-            )
-
-        return actions
+        if self._action_handler:
+            return self._action_handler._normalize_action(raw)
+        return raw
 
     @staticmethod
     def _sanitize_for_user(text: str) -> str:
         """Strip action blocks and bare JSON from text before showing to user."""
-        # Remove fenced code blocks containing JSON
-        cleaned = re.sub(r'```\w*\s*\{.*?\}\s*```', '', text, flags=re.DOTALL)
-        # Remove bare JSON objects
-        cleaned = re.sub(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', '', cleaned)
-        # Remove [Saving to memory: ...] annotations
-        cleaned = re.sub(r'\[.*?(?:memory|saving|delegat).*?\]', '', cleaned, flags=re.IGNORECASE)
-        # Collapse excessive whitespace
-        cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
-        return cleaned.strip()
+        return ActionHandler._sanitize_for_user(text)
 
     async def _handle_common_actions(self, actions: list[dict]) -> None:
-        """Process actions that modify state without producing messages.
-
-        .. deprecated::
-            Kept for backward compatibility with any code that still
-            calls it directly.  All action handling now goes through
-            the :class:`ActionRegistry` in ``_parse_response``.
-        """
-        if self._action_registry:
-            from core.actions.base import ActionContext
-            ctx = ActionContext()
-            for action in actions:
-                if action.get("action") == "update_document" and action.get("doc_id"):
-                    ctx.edited_doc_ids.add(action["doc_id"])
-            for action in actions:
-                await self._action_registry.execute(
-                    self, action, Message(sender="system", recipient=self.agent_id,
-                                         type=MessageType.SYSTEM, content=""), ctx,
-                )
-            if ctx.kb_changed and self._broker:
-                await self._broker.broadcast_event({
-                    "event_type": "knowledge_updated", "data": {},
-                })
+        """Process actions that modify state without producing messages."""
+        if self._action_handler:
+            self._action_handler.current_task_id = self.current_task_id
+            await self._action_handler._handle_common_actions(actions)
             return
-
-        # Legacy fallback (no registry)
-        kb_changed = False
-        edited_doc_ids: set[str] = set()
-        for action in actions:
-            if action.get("action") == "update_document" and action.get("doc_id"):
-                edited_doc_ids.add(action["doc_id"])
-
-        for action in actions:
-            action_type = action.get("action")
-
-            if action_type == "update_memory":
-                await self._handle_memory_update(action)
-
-            elif action_type == "write_document":
-                await self._handle_write_document(action)
-                kb_changed = True
-
-            elif action_type == "update_document":
-                await self._handle_update_document(action)
-                kb_changed = True
-
-            elif action_type == "resolve_comments":
-                await self._handle_resolve_comments(action, edited_doc_ids)
-
-            elif action_type == "update_task":
-                await self._handle_update_task(action)
-
-            elif action_type == "start_conversation":
-                await self._handle_start_conversation(action)
-
-            elif action_type == "end_conversation":
-                await self._handle_end_conversation(action)
-
-        # Broadcast KB update so frontend auto-refreshes
-        if kb_changed and self._broker:
-            await self._broker.broadcast_event({
-                "event_type": "knowledge_updated",
-                "data": {},
-            })
+        # No-op fallback
+        return
 
     async def _handle_memory_update(self, action: dict):
-        if not self._memory_manager:
-            return
-        memory_type = action.get("memory_type", "")
-        content = action.get("content", "")
-        if not content:
-            return
-        if memory_type == "personality":
-            await self._memory_manager.update_personality_memory(self.agent_id, content)
-        elif memory_type == "project":
-            await self._memory_manager.update_project_memory(self.agent_id, content)
-        else:
-            logger.warning("Unknown memory_type '%s' from %s", memory_type, self.agent_id)
+        if self._action_handler:
+            await self._action_handler._handle_memory_update(action)
 
     async def _handle_write_document(self, action: dict):
-        if not self._knowledge_base:
-            return
-        title = action.get("title", "")
-        category = action.get("category", "") or self._infer_doc_category(title)
-        content = action.get("content", "")
-        if not title or not content:
-            logger.warning(
-                "Agent %s write_document missing fields: title=%s, category=%s, content_len=%d",
-                self.agent_id, bool(title), bool(category), len(content),
-            )
-            return
-        if not category:
-            category = "specs"  # default for documents without explicit category
-        try:
-            await self._knowledge_base.add_document(
-                title=title, category=category,
-                content=content, created_by=self.agent_id,
-            )
-        except ValueError as e:
-            logger.warning("KB write_document error from %s: %s", self.agent_id, e)
+        if self._action_handler:
+            await self._action_handler._handle_write_document(action)
 
     @staticmethod
     def _infer_doc_category(title: str) -> str:
         """Infer document category from title/path when not explicitly provided."""
-        t = title.lower()
-        if any(k in t for k in ("spec", "requirement", "product")):
-            return "specs"
-        if any(k in t for k in ("arch", "design", "system")):
-            return "architecture"
-        if any(k in t for k in ("plan", "roadmap", "milestone")):
-            return "planning"
-        return ""
+        from core.actions.base import infer_doc_category
+        return infer_doc_category(title)
 
     async def _handle_update_document(self, action: dict):
-        if not self._knowledge_base:
-            return
-        doc_id = action.get("doc_id", "")
-        content = action.get("content", "")
-        if not doc_id or not content:
-            return
-        await self._knowledge_base.update_document(
-            doc_id=doc_id, content=content, updated_by=self.agent_id,
-        )
+        if self._action_handler:
+            await self._action_handler._handle_update_document(action)
 
     async def _handle_resolve_comments(
         self, action: dict, edited_doc_ids: set[str] | None = None,
     ):
-        """Agent resolves one or more comments on a document."""
-        if not self._knowledge_base:
-            return
-        doc_id = action.get("doc_id", "")
-        resolutions = action.get("resolutions", [])
-        if not doc_id or not resolutions:
-            logger.warning("Agent %s resolve_comments missing fields", self.agent_id)
-            return
-
-        edit_verified = bool(edited_doc_ids and doc_id in edited_doc_ids)
-        if not edit_verified:
-            logger.warning(
-                "Agent %s resolved comments on %s WITHOUT editing the document",
-                self.agent_id, doc_id,
-            )
-
-        resolved = await self._knowledge_base.resolve_comments(
-            doc_id, resolutions, edit_verified=edit_verified,
-        )
-        if resolved and self._broker:
-            logger.info(
-                "Agent %s resolved %d comment(s) on %s (edit_verified=%s)",
-                self.agent_id, len(resolved), doc_id, edit_verified,
-            )
-            await self._broker.broadcast_event({
-                "event_type": "comments_updated",
-                "data": {"doc_id": doc_id},
-            })
-
-        # Auto-complete the current task if all assigned comments are resolved
-        if resolved and self.current_task_id and self._task_board:
-            all_comments = await self._knowledge_base.get_comments(doc_id)
-            remaining = [
-                c for c in all_comments
-                if c["status"] == "open" and c.get("assigned_to") == self.agent_id
-            ]
-            if not remaining:
-                verified_str = "with verified edits" if edit_verified else "WITHOUT document edits (unverified)"
-                await self._task_board.update_task(
-                    self.current_task_id,
-                    status="done",
-                    _agent_id=self.agent_id,
-                    completion_summary=(
-                        f"Resolved {len(resolved)} comment(s) on \"{doc_id}\" {verified_str}."
-                    ),
-                )
-                logger.info(
-                    "Auto-completed task %s after resolving all comments",
-                    self.current_task_id,
-                )
+        if self._action_handler:
+            self._action_handler.current_task_id = self.current_task_id
+            await self._action_handler._handle_resolve_comments(action, edited_doc_ids)
 
     async def _handle_update_task(self, action: dict):
-        if not self._task_board:
-            return
-        task_id = action.get("task_id")
-        if not task_id:
-            return
-        updates = {"_agent_id": self.agent_id}
-        for key in ("status", "assignee", "role", "priority", "reviewer",
-                     "progress_note", "completion_summary", "review_output",
-                     "paused_summary", "labels", "outcome"):
-            if key in action:
-                updates[key] = action[key]
-        await self._task_board.update_task(task_id, **updates)
+        if self._action_handler:
+            await self._action_handler._handle_update_task(action)
 
     async def _handle_start_conversation(self, action: dict):
-        """Agent requests a direct conversation with the user."""
-        if not self._conversation_manager:
-            logger.warning("No conversation_manager for %s", self.agent_id)
-            return
-        goals = action.get("goals", [])
-        title = action.get("title", "Conversation")
-        conv = await self._conversation_manager.start(self.agent_id, goals, title)
-
-        # Send CONVERSATION message to self with the conversation context
-        if self._broker:
-            msg = Message(
-                sender="system",
-                recipient=self.agent_id,
-                type=MessageType.CONVERSATION,
-                content=f"Conversation started: {title}. Goals: {', '.join(goals)}",
-                metadata={"conversation_id": conv["id"]},
-            )
-            await self._broker.deliver(msg)
+        if self._action_handler:
+            await self._action_handler._handle_start_conversation(action)
 
     async def _handle_end_conversation(self, action: dict):
-        """Agent ends a direct conversation with the user."""
-        if not self._conversation_manager:
-            return
-        summary = action.get("summary", "")
-        conv = await self._conversation_manager.close_by_agent(self.agent_id)
-        if not conv:
-            return
+        if self._action_handler:
+            await self._action_handler._handle_end_conversation(action)
 
-        # Save summary to knowledge base
-        if summary and self._knowledge_base:
-            try:
-                await self._knowledge_base.add_document(
-                    title=conv.get("title", "Conversation Summary"),
-                    category="specs",
-                    content=summary,
-                    created_by=self.agent_id,
-                )
-                if self._broker:
-                    await self._broker.broadcast_event({
-                        "event_type": "knowledge_updated",
-                        "data": {},
-                    })
-            except Exception:
-                logger.exception("Failed to save conversation summary to KB")
+    # ------------------------------------------------------------------
+    # Class-level dicts kept for backward compatibility (read-only access)
+    # ------------------------------------------------------------------
 
-        # Send summary to the user-facing agent so they know what was discussed
-        if summary and self._broker:
-            summary_msg = Message(
-                sender=self.agent_id,
-                recipient=self._user_facing_agent,
-                type=MessageType.RESPONSE,
-                content=(
-                    f"Conversation completed: '{conv.get('title', 'Conversation')}'\n\n"
-                    f"Summary:\n{summary}"
-                ),
-                metadata={"conversation_summary": True},
-            )
-            await self._broker.deliver(summary_msg)
+    _ACTION_KEY_MAP = ActionHandler._ACTION_KEY_MAP
+    _ACTION_NAME_MAP = ActionHandler._ACTION_NAME_MAP
+    _FIELD_MAP = ActionHandler._FIELD_MAP
+
+    # ------------------------------------------------------------------
+    # Remaining Agent methods (not extracted)
+    # ------------------------------------------------------------------
+
+    def update_team_roster(self, roster_text: str, team_roles: str = "", routing_guide: str = ""):
+        """Re-render system prompt with updated team roster."""
+        self._team_roster = roster_text
+        self._team_roles = team_roles
+        self._routing_guide = routing_guide
+        self.system_prompt = self._render_prompt_template(
+            self._prompt_template, roster_text,
+            team_roles=team_roles, routing_guide=routing_guide,
+        )
+        # Sync into PromptBuilder
+        if self._prompt_builder:
+            self._prompt_builder.system_prompt = self.system_prompt
+            self._prompt_builder._team_roster = roster_text
+            self._prompt_builder._team_roles = team_roles
+            self._prompt_builder._routing_guide = routing_guide
+            self._prompt_builder._prompt_template = self._prompt_template
 
     async def _broadcast_status(self):
         if self._broker:

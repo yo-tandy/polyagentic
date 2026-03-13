@@ -80,8 +80,8 @@ async def init_db(url: str | None = None) -> None:
             try:
                 await conn.execute(text(stmt))
                 logger.info("Migration applied: %s", stmt)
-            except Exception:
-                pass  # Column already exists
+            except Exception as e:
+                logger.debug("Migration skipped (likely exists): %s — %s", stmt, e)
 
     # Ensure agent_roles are re-seeded when new actions/deps are added
     # (dev-mode: drop and re-seed roles to pick up new capabilities)
@@ -97,8 +97,8 @@ async def init_db(url: str | None = None) -> None:
                     await session.execute(text("DELETE FROM agent_roles"))
                     await session.commit()
                     logger.info("Cleared agent_roles for re-seeding (new MCP actions)")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Role seed check (rory): %s", e)
 
         # Also check: project_manager should have create_batch_tickets
         result2 = await session.execute(text("SELECT allowed_actions FROM agent_roles WHERE role_id = 'project_manager' LIMIT 1"))
@@ -110,8 +110,8 @@ async def init_db(url: str | None = None) -> None:
                     await session.execute(text("DELETE FROM agent_roles"))
                     await session.commit()
                     logger.info("Cleared agent_roles for re-seeding (PM permissions update)")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Role seed check (jerry): %s", e)
 
     # Seed default organization (existing data uses tenant_id='default')
     async with _session_factory() as session:

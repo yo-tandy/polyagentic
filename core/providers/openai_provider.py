@@ -4,12 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-import time
-from pathlib import Path
+from typing import Any
 
-from core.providers.base import BaseProvider
-from core.subprocess_manager import SubprocessResult
+from core.providers.api_provider_base import APIProviderBase
 from core.providers.tool_executor import (
     ToolExecutor,
     build_tool_schemas_openai,
@@ -17,7 +14,7 @@ from core.providers.tool_executor import (
 
 logger = logging.getLogger(__name__)
 
-# Model alias mapping: short names → full API model IDs
+# Model alias mapping: short names -> full API model IDs
 OPENAI_MODEL_MAP = {
     "gpt-4o": "gpt-4o",
     "gpt-4o-mini": "gpt-4o-mini",
@@ -45,249 +42,146 @@ OPENAI_PRICING = {
     "o4-mini": (1.10, 4.40),
 }
 
-MAX_TOOL_LOOP_ITERATIONS = 25
 
-
-class OpenAIProvider(BaseProvider):
+class OpenAIProvider(APIProviderBase):
     """OpenAI API provider with agentic tool-calling loop."""
 
-    def __init__(
-        self,
-        api_key: str | None = None,
-        history_repo=None,
-        project_id: str = "",
-        agent_id: str = "",
-    ):
-        self._api_key = api_key or os.environ.get("OPENAI_API_KEY", "")
-        self._history_repo = history_repo
-        self._project_id = project_id
-        self._agent_id = agent_id
-        self._client = None  # Lazy init
+    PROVIDER_NAME = "OpenAI"
+    MODEL_MAP = OPENAI_MODEL_MAP
+    PRICING = OPENAI_PRICING
+    DEFAULT_PRICING = (2.50, 10.00)
+    ENV_KEY = "OPENAI_API_KEY"
 
-    def _get_client(self):
+    # -- Abstract method implementations --------------------------------
+
+    def _get_client(self) -> Any:
         if self._client is None:
             from openai import AsyncOpenAI
             self._client = AsyncOpenAI(api_key=self._api_key)
         return self._client
 
-    async def invoke(
-        self,
-        prompt: str,
-        system_prompt: str | None = None,
-        model: str = "gpt-4o",
-        allowed_tools: str | None = None,
-        session_id: str | None = None,
-        working_dir: Path | None = None,
-        timeout: int = 300,
-        max_budget_usd: float | None = None,
-    ) -> SubprocessResult:
-        start_ms = time.monotonic_ns() // 1_000_000
-        resolved_model = OPENAI_MODEL_MAP.get(model, model)
-        tool_executor = ToolExecutor(working_dir) if working_dir else ToolExecutor()
+    def _build_tool_schemas(self, allowed_tools: str | None) -> list:
+        return build_tool_schemas_openai(allowed_tools)
 
-        # Build tool schemas (OpenAI format)
-        tools = build_tool_schemas_openai(allowed_tools)
-
-        # Load or start conversation history
-        messages = []
-        new_session = False
-        if session_id and self._history_repo:
-            messages = await self._history_repo.get_history(session_id)
-        if not session_id and self._history_repo:
-            session_id = await self._history_repo.create_session(
-                self._project_id, self._agent_id,
-            )
-            new_session = True
-
-        # Prepend system message if provided
+    def _inject_system_prompt(
+        self, messages: list[dict], system_prompt: str | None,
+    ) -> None:
         if system_prompt:
             # Only add system if not already present
             if not messages or messages[0].get("role") != "system":
                 messages.insert(0, {"role": "system", "content": system_prompt})
 
-        # Append user message
-        messages.append({"role": "user", "content": prompt})
+    async def _call_api(
+        self,
+        client: Any,
+        model: str,
+        messages: list[dict],
+        system_prompt: str | None,
+        tools: list,
+    ) -> Any:
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+        }
+        if tools:
+            kwargs["tools"] = tools
 
-        # Persist user message
+        return await client.chat.completions.create(**kwargs)
+
+    def _extract_tokens(self, response: Any) -> tuple[int, int]:
+        if response.usage:
+            return (
+                response.usage.prompt_tokens or 0,
+                response.usage.completion_tokens or 0,
+            )
+        return (0, 0)
+
+    def _extract_tool_calls(self, response: Any) -> list:
+        choice = response.choices[0]
+        message = choice.message
+        tool_calls = message.tool_calls or []
+        if not tool_calls or choice.finish_reason == "stop":
+            return []
+        return tool_calls
+
+    def _extract_text(self, response: Any) -> str:
+        return response.choices[0].message.content or ""
+
+    async def _execute_and_append_tool_results(
+        self,
+        messages: list[dict],
+        response: Any,
+        tool_executor: ToolExecutor,
+        tool_calls: list,
+        session_id: str | None,
+    ) -> None:
+        message = response.choices[0].message
+
+        # Append assistant message with tool_calls
+        assistant_msg = {
+            "role": "assistant",
+            "content": message.content or "",
+            "tool_calls": [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {
+                        "name": tc.function.name,
+                        "arguments": tc.function.arguments,
+                    },
+                }
+                for tc in tool_calls
+            ],
+        }
+        messages.append(assistant_msg)
+
+        # Persist assistant message with tool calls
         if self._history_repo and session_id:
             await self._history_repo.append(
                 session_id=session_id,
                 project_id=self._project_id,
                 agent_id=self._agent_id,
-                role="user",
-                content=prompt,
+                role="assistant",
+                content=message.content or "",
+                tool_calls=[
+                    {
+                        "id": tc.id,
+                        "name": tc.function.name,
+                        "input": json.loads(tc.function.arguments),
+                    }
+                    for tc in tool_calls
+                ],
             )
 
-        total_input_tokens = 0
-        total_output_tokens = 0
+        # Execute each tool and collect results
+        for tc in tool_calls:
+            tool_name = tc.function.name
+            try:
+                tool_args = json.loads(tc.function.arguments)
+            except json.JSONDecodeError:
+                tool_args = {}
 
-        try:
-            client = self._get_client()
+            logger.info(
+                "Executing tool %s (id=%s) for agent %s",
+                tool_name, tc.id, self._agent_id,
+            )
+            result = await tool_executor.execute(tool_name, tool_args)
 
-            for iteration in range(MAX_TOOL_LOOP_ITERATIONS):
-                # Build API kwargs
-                kwargs = {
-                    "model": resolved_model,
-                    "messages": messages,
-                }
-                if tools:
-                    kwargs["tools"] = tools
+            # OpenAI expects tool results as separate messages
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tc.id,
+                "content": result,
+            })
 
-                logger.info(
-                    "OpenAI API call: model=%s, iteration=%d, messages=%d, tools=%d",
-                    resolved_model, iteration, len(messages), len(tools),
+            # Persist tool result
+            if self._history_repo and session_id:
+                await self._history_repo.append(
+                    session_id=session_id,
+                    project_id=self._project_id,
+                    agent_id=self._agent_id,
+                    role="tool",
+                    content=result,
+                    tool_call_id=tc.id,
+                    tool_name=tool_name,
                 )
-
-                response = await client.chat.completions.create(**kwargs)
-
-                choice = response.choices[0]
-                message = choice.message
-
-                # Track tokens
-                if response.usage:
-                    total_input_tokens += response.usage.prompt_tokens or 0
-                    total_output_tokens += response.usage.completion_tokens or 0
-
-                # Check for tool calls
-                tool_calls = message.tool_calls or []
-
-                if not tool_calls or choice.finish_reason == "stop":
-                    # No more tool calls — extract final text
-                    result_text = message.content or ""
-
-                    # Persist assistant message
-                    if self._history_repo and session_id:
-                        await self._history_repo.append(
-                            session_id=session_id,
-                            project_id=self._project_id,
-                            agent_id=self._agent_id,
-                            role="assistant",
-                            content=result_text,
-                        )
-
-                    duration_ms = (time.monotonic_ns() // 1_000_000) - start_ms
-                    cost = self._estimate_cost(
-                        resolved_model, total_input_tokens, total_output_tokens,
-                    )
-
-                    return SubprocessResult(
-                        result_text=result_text,
-                        session_id=session_id,
-                        cost_usd=cost,
-                        duration_ms=duration_ms,
-                        input_tokens=total_input_tokens,
-                        output_tokens=total_output_tokens,
-                        is_error=False,
-                    )
-
-                # Tool calls present — execute them
-                # Append assistant message with tool_calls
-                assistant_msg = {
-                    "role": "assistant",
-                    "content": message.content or "",
-                    "tool_calls": [
-                        {
-                            "id": tc.id,
-                            "type": "function",
-                            "function": {
-                                "name": tc.function.name,
-                                "arguments": tc.function.arguments,
-                            },
-                        }
-                        for tc in tool_calls
-                    ],
-                }
-                messages.append(assistant_msg)
-
-                # Persist assistant message with tool calls
-                if self._history_repo and session_id:
-                    await self._history_repo.append(
-                        session_id=session_id,
-                        project_id=self._project_id,
-                        agent_id=self._agent_id,
-                        role="assistant",
-                        content=message.content or "",
-                        tool_calls=[
-                            {
-                                "id": tc.id,
-                                "name": tc.function.name,
-                                "input": json.loads(tc.function.arguments),
-                            }
-                            for tc in tool_calls
-                        ],
-                    )
-
-                # Execute each tool and collect results
-                for tc in tool_calls:
-                    tool_name = tc.function.name
-                    try:
-                        tool_args = json.loads(tc.function.arguments)
-                    except json.JSONDecodeError:
-                        tool_args = {}
-
-                    logger.info(
-                        "Executing tool %s (id=%s) for agent %s",
-                        tool_name, tc.id, self._agent_id,
-                    )
-                    result = await tool_executor.execute(tool_name, tool_args)
-
-                    # OpenAI expects tool results as separate messages
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "content": result,
-                    })
-
-                    # Persist tool result
-                    if self._history_repo and session_id:
-                        await self._history_repo.append(
-                            session_id=session_id,
-                            project_id=self._project_id,
-                            agent_id=self._agent_id,
-                            role="tool",
-                            content=result,
-                            tool_call_id=tc.id,
-                            tool_name=tool_name,
-                        )
-
-            # Exceeded max iterations
-            duration_ms = (time.monotonic_ns() // 1_000_000) - start_ms
-            return SubprocessResult(
-                result_text="[ERROR] Max tool loop iterations exceeded",
-                session_id=session_id,
-                cost_usd=self._estimate_cost(
-                    resolved_model, total_input_tokens, total_output_tokens,
-                ),
-                duration_ms=duration_ms,
-                input_tokens=total_input_tokens,
-                output_tokens=total_output_tokens,
-                is_error=True,
-            )
-
-        except Exception as e:
-            duration_ms = (time.monotonic_ns() // 1_000_000) - start_ms
-            logger.error("OpenAI API error for agent %s: %s", self._agent_id, e)
-            return SubprocessResult(
-                result_text=f"[ERROR] OpenAI API: {e}",
-                session_id=session_id,
-                cost_usd=self._estimate_cost(
-                    resolved_model, total_input_tokens, total_output_tokens,
-                ),
-                duration_ms=duration_ms,
-                input_tokens=total_input_tokens,
-                output_tokens=total_output_tokens,
-                is_error=True,
-            )
-
-    def supports_resume(self) -> bool:
-        return False
-
-    @staticmethod
-    def _estimate_cost(
-        model: str, input_tokens: int, output_tokens: int,
-    ) -> float:
-        """Estimate cost based on published pricing."""
-        prices = OPENAI_PRICING.get(model, (2.50, 10.00))
-        input_cost = (input_tokens / 1_000_000) * prices[0]
-        output_cost = (output_tokens / 1_000_000) * prices[1]
-        return round(input_cost + output_cost, 6)

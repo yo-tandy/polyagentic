@@ -7,8 +7,8 @@ async writes hit DB + refresh cache.
 from __future__ import annotations
 
 import logging
-import uuid
 
+from core.constants import gen_id
 from db.repositories.phase_repo import PhaseRepository
 
 logger = logging.getLogger(__name__)
@@ -42,7 +42,7 @@ class PhaseBoard:
     async def create_phase(
         self, name: str, description: str, created_by: str, ordering: int = 0,
     ) -> dict:
-        phase_id = f"phase-{uuid.uuid4().hex[:8]}"
+        phase_id = gen_id("phase-", 8)
         rec = await self._repo.create(
             project_id=self._project_id,
             id=phase_id,

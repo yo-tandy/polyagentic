@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Polyagentic Dashboard</title>
     <link rel="stylesheet" href="/static/css/main.css?v=2">
-    <link rel="stylesheet" href="/static/css/dashboard.css?v=6">
+    <link rel="stylesheet" href="/static/css/dashboard.css?v=8">
 </head>
 <body>
     <header class="header">
@@ -214,6 +214,42 @@
         </div>
     </div>
 
+    <!-- Add to Agent Repository Modal -->
+    <div class="modal-overlay" id="add-to-repo-modal">
+        <div class="modal">
+            <div class="modal__header">
+                <h2 class="modal__title">Add to Agent Repository</h2>
+                <button class="modal__close" id="add-to-repo-close">&times;</button>
+            </div>
+            <div class="modal__body">
+                <p style="margin:0 0 12px;color:var(--text-muted);font-size:12px;">
+                    This agent is not in the repository. Save as a reusable template?
+                </p>
+                <input type="hidden" id="repo-add-agent-id">
+                <div class="form-group">
+                    <label>Name</label>
+                    <input type="text" id="repo-add-name" placeholder="Agent name">
+                </div>
+                <div class="form-group">
+                    <label>Title / Role</label>
+                    <input type="text" id="repo-add-title" placeholder="e.g. Senior Frontend Developer">
+                </div>
+                <div class="form-group">
+                    <label>Personality</label>
+                    <textarea id="repo-add-personality" rows="4" placeholder="Agent personality description..."></textarea>
+                </div>
+                <div class="form-group">
+                    <label>Scope</label>
+                    <select id="repo-add-scope">
+                        <option value="org">Organization</option>
+                        <option value="global">Global</option>
+                    </select>
+                </div>
+                <button class="btn btn--primary" id="repo-add-save">Save to Repository</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Session Status Modal -->
     <div class="modal-overlay" id="session-status-modal">
         <div class="modal modal--session-status">
@@ -236,9 +272,28 @@
         </div>
     </div>
 
+    <!-- Re-Auth Modal -->
+    <div class="modal-overlay" id="reauth-modal">
+        <div class="modal modal--reauth">
+            <div class="modal__header">
+                <h2 class="modal__title">Authentication Required</h2>
+                <button class="modal__close" id="reauth-close">&times;</button>
+            </div>
+            <div class="modal__body">
+                <p>Claude CLI authentication has expired. All agents are paused until re-authenticated.</p>
+                <p>Click <strong>Re-authenticate</strong> to open the OAuth login in your browser.</p>
+                <div class="reauth-actions">
+                    <button class="btn btn--primary" id="reauth-confirm">Re-authenticate</button>
+                    <button class="btn btn--secondary" id="reauth-cancel">Cancel</button>
+                </div>
+                <div class="reauth-status" id="reauth-status"></div>
+            </div>
+        </div>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/marked@15.0.4/marked.min.js"></script>
     <script src="/static/js/components/projectSelector.js?v=2"></script>
-    <script src="/static/js/components/agentPanel.js?v=2"></script>
+    <script src="/static/js/components/agentPanel.js?v=5"></script>
     <script src="/static/js/components/taskBoard.js?v=4"></script>
     <script src="/static/js/components/chatView.js?v=3"></script>
     <script src="/static/js/components/activityLog.js?v=2"></script>
@@ -249,6 +304,6 @@
     <script src="/static/js/components/conversationBar.js?v=2"></script>
     <script src="/static/js/components/conversationWindow.js?v=2"></script>
     <script src="/static/js/components/projectInfo.js?v=2"></script>
-    <script src="/static/js/app.js?v=4"></script>
+    <script src="/static/js/app.js?v=6"></script>
 </body>
 </html>

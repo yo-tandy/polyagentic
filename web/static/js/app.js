@@ -41,6 +41,7 @@ const App = {
         await this.loadInitialState();
         this.connectWebSocket();
         this.startPolling();
+        this._initReauthModal();
     },
 
     async loadUserInfo() {
@@ -157,7 +158,7 @@ const App = {
     handleEvent(event) {
         switch (event.event_type) {
             case 'agent_status':
-                AgentPanel.updateStatus(event.data.agent_id, event.data.status, event.data.last_error);
+                AgentPanel.updateStatus(event.data.agent_id, event.data.status, event.data.last_error, event.data.activity);
                 break;
 
             case 'chat_response':
@@ -249,6 +250,88 @@ const App = {
                     timestamp: new Date().toISOString(),
                 });
                 break;
+
+            case 'auth_required':
+                App.showReauthModal();
+                break;
+
+            case 'auth_restored':
+                App.hideReauthModal();
+                // Update all pending-reauth agents to idle
+                if (event.data.resumed_agents) {
+                    event.data.resumed_agents.forEach(id => {
+                        AgentPanel.updateStatus(id, 'idle');
+                    });
+                }
+                break;
+        }
+    },
+
+    showReauthModal() {
+        const modal = document.getElementById('reauth-modal');
+        if (modal) {
+            modal.classList.add('active');
+            // Reset status text
+            const status = document.getElementById('reauth-status');
+            if (status) { status.textContent = ''; status.className = 'reauth-status'; }
+            // Re-enable button
+            const btn = document.getElementById('reauth-confirm');
+            if (btn) { btn.disabled = false; btn.textContent = 'Re-authenticate'; }
+        }
+    },
+
+    hideReauthModal() {
+        const modal = document.getElementById('reauth-modal');
+        if (modal) modal.classList.remove('active');
+    },
+
+    _initReauthModal() {
+        const confirmBtn = document.getElementById('reauth-confirm');
+        const cancelBtn = document.getElementById('reauth-cancel');
+        const closeBtn = document.getElementById('reauth-close');
+        const statusEl = document.getElementById('reauth-status');
+
+        if (confirmBtn) {
+            confirmBtn.addEventListener('click', async () => {
+                confirmBtn.disabled = true;
+                confirmBtn.textContent = 'Authenticating...';
+                if (statusEl) {
+                    statusEl.textContent = 'Opening OAuth login in your browser...';
+                    statusEl.className = 'reauth-status reauth-status--pending';
+                }
+                try {
+                    const res = await fetch('/sessions/reauth', { method: 'POST' });
+                    const data = await res.json();
+                    if (data.status === 'ok') {
+                        if (statusEl) {
+                            statusEl.textContent = 'Authentication successful!';
+                            statusEl.className = 'reauth-status reauth-status--success';
+                        }
+                        setTimeout(() => App.hideReauthModal(), 1500);
+                    } else {
+                        if (statusEl) {
+                            statusEl.textContent = `Authentication failed: ${data.error || 'Unknown error'}`;
+                            statusEl.className = 'reauth-status reauth-status--error';
+                        }
+                        confirmBtn.disabled = false;
+                        confirmBtn.textContent = 'Re-authenticate';
+                    }
+                } catch (err) {
+                    if (statusEl) {
+                        statusEl.textContent = `Error: ${err.message}`;
+                        statusEl.className = 'reauth-status reauth-status--error';
+                    }
+                    confirmBtn.disabled = false;
+                    confirmBtn.textContent = 'Re-authenticate';
+                }
+            });
+        }
+
+        if (cancelBtn) {
+            cancelBtn.addEventListener('click', () => App.hideReauthModal());
+        }
+        if (closeBtn) {
+            closeBtn.addEventListener('click', () => App.hideReauthModal());
         }
     },
 

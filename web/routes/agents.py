@@ -20,7 +20,26 @@ class AgentMessageRequest(BaseModel):
 @router.get("/agents")
 async def get_agents(request: Request):
     registry = request.app.state.registry
-    return {"agents": registry.get_status_summary()}
+    ts = getattr(request.app.state, "team_structure", None)
+    fixed_ids = (
+        ts.get_fixed_ids() if ts
+        else {"manny", "rory", "innes", "perry", "jerry"}
+    )
+
+    template_repo = getattr(request.app.state, "template_repo", None)
+    sourced_ids: set[str] = set()
+    if template_repo:
+        try:
+            sourced_ids = await template_repo.get_source_agent_ids()
+        except Exception:
+            logger.debug("Failed to fetch source_agent_ids", exc_info=True)
+
+    agents = registry.get_status_summary()
+    for a in agents:
+        is_fixed = a["id"] in fixed_ids
+        a["is_fixed"] = is_fixed
+        a["in_repository"] = is_fixed or a["id"] in sourced_ids
+    return {"agents": agents}
 
 
 @router.get("/agents/{agent_id}")

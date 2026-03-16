@@ -25,7 +25,7 @@ class UpdateTask(BaseAction):
                      enum=["draft", "pending", "in_progress", "review",
                            "done", "paused", "blocked", "cancelled"]),
         ActionField("progress_note", "string",
-                     description="Brief status update"),
+                     description="Detailed progress update — name files, functions, and specific changes made"),
         ActionField("completion_summary", "string",
                      description="Summary when marking done"),
         ActionField("reviewer", "string",

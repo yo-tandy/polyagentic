@@ -43,6 +43,16 @@ class UpdateMemory(BaseAction):
             await agent._memory_manager.update_personality_memory(
                 agent.agent_id, content,
             )
+            # Sync personality back to linked agent template
+            template_repo = agent.deps.get("template_repo")
+            if template_repo:
+                tmpl = await template_repo.get_by_source_agent(agent.agent_id)
+                if tmpl:
+                    await template_repo.update(tmpl.id, personality=content)
+                    logger.info(
+                        "Synced personality to template %s for agent %s",
+                        tmpl.id, agent.agent_id,
+                    )
         elif memory_type == "project":
             await agent._memory_manager.update_project_memory(
                 agent.agent_id, content,

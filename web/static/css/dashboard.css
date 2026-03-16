@@ -198,6 +198,43 @@
 .status--error { background: #2e1a1a; color: var(--red); }
 .status--offline { background: #1a1a1a; color: var(--text-muted); }
 
+.agent-card__activity {
+    margin-left: 4px;
+    font-size: 9px;
+    vertical-align: middle;
+}
+
+.activity--model {
+    animation: pulse-activity 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse-activity {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+}
+
+.activity--processing {
+    display: inline-block;
+    animation: spin-activity 2s linear infinite;
+}
+
+@keyframes spin-activity {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+.agent-card__diamond {
+    color: var(--blue);
+    font-size: 10px;
+    margin-left: 4px;
+    cursor: pointer;
+    opacity: 0.8;
+    vertical-align: middle;
+}
+.agent-card__diamond:hover {
+    opacity: 1;
+}
+
 .agent-card__error {
     font-size: 10px;
     color: var(--red);
@@ -213,6 +250,32 @@
     cursor: pointer;
 }
 .status--session-paused { background: #2e2200; color: #fbbf24; }
+.status--pending-reauth { background: #2e1a2e; color: #e879f9; }
+
+/* Re-auth modal */
+.modal--reauth { max-width: 460px; }
+.reauth-actions {
+    display: flex;
+    gap: 12px;
+    margin-top: 16px;
+}
+.reauth-actions .btn { flex: 1; }
+.reauth-actions .btn--secondary {
+    background: var(--surface-hover);
+    color: var(--text);
+    border: 1px solid var(--border);
+}
+.reauth-actions .btn--secondary:hover {
+    background: var(--border);
+}
+.reauth-status {
+    margin-top: 12px;
+    font-size: 13px;
+    min-height: 20px;
+}
+.reauth-status--pending { color: var(--yellow); }
+.reauth-status--success { color: var(--green); }
+.reauth-status--error   { color: var(--red); }
 
 /* Task board */
 #task-board {

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
@@ -49,11 +50,17 @@ class MessageBroker:
         self._conversation_manager = None
         self._checkpoint_agent = "jerry"
         self._last_demo_count = 0
+        self._last_nudge_time: float = time.monotonic()
 
     def _get_poll_interval(self) -> float:
         if self._config:
             return self._config.get("POLL_INTERVAL_SECONDS", 1.0)
         return 1.0
+
+    def _get_nudge_interval(self) -> float:
+        if self._config:
+            return self._config.get("NUDGE_INTERVAL_SECONDS", 20)
+        return 20
 
     def _get_demo_pause_interval(self) -> int:
         if self._config:
@@ -73,9 +80,15 @@ class MessageBroker:
     async def start(self):
         self._running = True
         poll = self._get_poll_interval()
-        logger.info("Message broker started (polling every %.1fs)", poll)
+        nudge = self._get_nudge_interval()
+        logger.info("Message broker started (polling every %.1fs, nudge every %.0fs)", poll, nudge)
         while self._running:
             await self._poll_cycle()
+            # Periodically nudge idle agents that have pending work
+            now = time.monotonic()
+            if now - self._last_nudge_time >= self._get_nudge_interval():
+                await self._nudge_idle_agents()
+                self._last_nudge_time = now
             await asyncio.sleep(poll)
 
     async def stop(self):
@@ -262,6 +275,49 @@ class MessageBroker:
         if ws in self._ws_clients:
             self._ws_clients.remove(ws)
             logger.info("WebSocket client disconnected (%d remaining)", len(self._ws_clients))
+
+    async def _nudge_idle_agents(self):
+        """Send STATUS_UPDATE nudges to idle agents that have pending work."""
+        if not self._task_board:
+            return
+        from core.agent import AgentStatus
+        from core.task import TaskStatus
+
+        for agent in self.registry.get_all():
+            # Only nudge agents that are idle (not working, offline, errored, or paused)
+            if agent.status not in (AgentStatus.IDLE, AgentStatus.WAITING):
+                continue
+            # Don't nudge if agent already has queued messages
+            if not agent.message_queue.empty():
+                continue
+            # Only nudge agents that have been idle for at least 20s
+            if time.monotonic() - agent.last_processed_at < 20:
+                continue
+
+            active_tasks = [
+                t for t in self._task_board.get_tasks_by_assignee(agent.agent_id)
+                if t.status in (TaskStatus.PENDING, TaskStatus.IN_PROGRESS)
+            ]
+            if not active_tasks:
+                continue
+
+            summary = ", ".join(
+                f"[{t.status.value}] {t.title}" for t in active_tasks[:5]
+            )
+            if len(active_tasks) > 5:
+                summary += f" (+{len(active_tasks) - 5} more)"
+
+            msg = Message(
+                sender="jerry",
+                recipient=agent.agent_id,
+                type=MessageType.STATUS_UPDATE,
+                content=(
+                    f"Nudge: you have {len(active_tasks)} task(s) needing attention: {summary}. "
+                    "Please pick up or continue your work."
+                ),
+            )
+            await self.deliver(msg)
+            logger.info("Nudged idle agent %s (%d tasks)", agent.agent_id, len(active_tasks))
 
     async def _check_demo_pause(self, message: Message):
         """After a response is delivered, check if we've hit the demo pause threshold."""

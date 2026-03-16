@@ -161,11 +161,11 @@ async def pause_all_sessions(request: Request):
             continue
         await session_store.set_state(agent.agent_id, SessionState.PAUSED)
         paused.append(agent.agent_id)
-
-    await broker.broadcast_event({
-        "event_type": "session_status",
-        "data": {"action": "pause_all", "agents": paused},
-    })
+        # Broadcast per-agent event so the agent panel updates immediately
+        await broker.broadcast_event({
+            "event_type": "session_status",
+            "data": {"agent_id": agent.agent_id, "session_state": "paused"},
+        })
 
     return {"status": "paused_all", "agents": paused}
 
@@ -185,13 +185,84 @@ async def resume_all_sessions(request: Request):
         if info and info.get("state") == SessionState.PAUSED.value:
             await session_store.set_state(agent.agent_id, SessionState.ACTIVE)
             resumed.append(agent.agent_id)
-
-    await broker.broadcast_event({
-        "event_type": "session_status",
-        "data": {"action": "resume_all", "agents": resumed},
-    })
+            # Broadcast per-agent event so the agent panel updates immediately
+            await broker.broadcast_event({
+                "event_type": "session_status",
+                "data": {"agent_id": agent.agent_id, "session_state": "active"},
+            })
 
     return {"status": "resumed_all", "agents": resumed}
+
+
+@router.post("/sessions/reauth")
+async def reauth(request: Request):
+    """Trigger Claude CLI OAuth login and resume PENDING_REAUTH agents on success."""
+    import asyncio
+    import time
+
+    from config import CLAUDE_CLI
+    from core.agent import Agent, AgentStatus
+    from core.subprocess_manager import SubprocessManager
+
+    registry = request.app.state.registry
+    broker = request.app.state.broker
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            CLAUDE_CLI, "auth", "login",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+    except asyncio.TimeoutError:
+        return JSONResponse(
+            {"status": "failed", "error": "OAuth login timed out (120s)"},
+            status_code=504,
+        )
+    except Exception as e:
+        return JSONResponse(
+            {"status": "failed", "error": str(e)},
+            status_code=500,
+        )
+
+    if proc.returncode != 0:
+        err = stderr.decode(errors="replace").strip()
+        return JSONResponse(
+            {"status": "failed", "error": err or "OAuth login failed"},
+            status_code=500,
+        )
+
+    # Success — update class-level auth state
+    SubprocessManager._auth_refreshed_at = time.monotonic()
+    SubprocessManager._auth_failed_at = None
+
+    # Reset the dedup flag so future auth errors can broadcast again
+    Agent._auth_event_broadcast = False
+
+    # Resume all PENDING_REAUTH agents → IDLE
+    resumed = []
+    for agent in registry.get_all():
+        if agent.status == AgentStatus.PENDING_REAUTH:
+            agent.status = AgentStatus.IDLE
+            resumed.append(agent.agent_id)
+            await broker.broadcast_event({
+                "event_type": "agent_status",
+                "data": {"agent_id": agent.agent_id, "status": "idle"},
+            })
+
+    # Broadcast auth_restored event so the frontend can hide the modal
+    await broker.broadcast_event({
+        "event_type": "auth_restored",
+        "data": {"resumed_agents": resumed},
+    })
+
+    return {"status": "ok", "resumed_agents": resumed}
+
+
+@router.post("/sessions/reauth/cancel")
+async def reauth_cancel(request: Request):
+    """Cancel reauth — agents stay in PENDING_REAUTH state."""
+    return {"status": "cancelled"}
 
 
 ALLOWED_MODELS = {"sonnet", "opus", "haiku"}

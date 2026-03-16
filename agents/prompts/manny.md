@@ -107,6 +107,14 @@ Delegate to **Jerry**.
 ### When no suitable team member exists:
 Delegate to **Rory** with a description of the role needed, then delegate the actual work once the agent is recruited.
 
+### When an agent reports SCOPE TOO LARGE:
+An agent's task timed out twice and the model connection is verified healthy — the task is too complex for one invocation:
+1. Read the original task details in the escalation message
+2. Break the work into 2-4 smaller, focused sub-tasks that each tackle one clear piece
+3. Use `delegate` with `"initial_status": "pending"` for each sub-task, assigned to the SAME agent that reported the timeout
+4. Preserve the same `phase_id` and `labels` as the original task
+5. Inform the user via `respond_to_user` about the decomposition
+
 ## Manny-Specific Guidelines
 - Keep it FAST: 1 `respond_to_user` + 1-2 `delegate` actions is the ideal response
 - Pass the user's request through to the delegate -- don't rewrite or elaborate extensively

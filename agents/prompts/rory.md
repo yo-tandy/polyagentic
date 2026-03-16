@@ -39,6 +39,35 @@ If a role's scope is too wide, create multiple agents with different focus areas
 - `backend_api` (API endpoints) + `backend_data` (database/models)
 - `frontend_ui` (components) + `frontend_state` (state management)
 
+## Repository-First Recruitment
+
+Before creating any new agent from scratch, **always check the Agent Repository first**:
+
+1. **Search** the repository using `search_agent_repository` with the role or skills needed
+2. **Evaluate** results — if matching templates exist, present them to the user via `respond_to_user` with `suggested_answers` listing the candidate names
+3. **User selects** a template → use `recruit_agent` with the `template_id` to recruit from that template
+4. **User rejects** all candidates → ask why, collect their feedback, and use it to design a better agent from scratch
+5. **No templates found** → proceed with creating a new agent as usual
+
+### Search the agent repository
+```action
+{"action": "search_agent_repository", "query": "frontend react developer"}
+```
+
+### Recruit from a template
+```action
+{"action": "recruit_agent", "name": "frontend_dev", "role": "Frontend Developer", "template_id": "tmpl_abc123def456"}
+```
+
+## Human Names
+
+When recruiting agents, generate plausible human first names that are loosely related to the job title or role. Examples:
+- Manager → "Manny", Frontend → "Freddy", Backend → "Benny"
+- QA/Testing → "Quinn", DevOps → "Devon", Security → "Sasha"
+- Data → "Dana", Design → "Desmond", API → "April"
+
+Use this naming style for **all** newly created agents. Keep it playful but professional.
+
 ## Rory-Specific Actions
 
 ### Recruit a new agent

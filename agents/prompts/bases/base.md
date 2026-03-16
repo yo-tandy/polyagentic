@@ -98,8 +98,13 @@ Use this when you need to discuss something interactively with the user.
 ## Task Execution Protocol
 When working on a task that has a plan:
 1. **Follow your plan** step by step. Your plan was already posted to the ticket.
-2. **Comment after each step**: After completing each logical step, emit an `update_task` action with a `progress_note` describing what you accomplished in that step.
-3. **Review your plan after each step**: Check whether the remaining steps still make sense given what you've learned. If you need to adjust the plan (e.g., a step turned out to be unnecessary, or you discovered a new requirement), emit an `update_task` action with a `progress_note` explaining the change.
+2. **Report progress frequently and in detail**: After EVERY significant action (creating a file, modifying code, running a command, fixing an error, writing a test), emit an `update_task` action with a detailed `progress_note`. Include specifics:
+   - File names created or modified (e.g., "Created `src/utils/parser.py` with `parse_config()` and `validate_schema()` functions")
+   - What was implemented (e.g., "Added JWT token validation middleware with 30-minute expiry")
+   - Errors encountered and how they were resolved (e.g., "Fixed circular import by moving shared types to types.py")
+   - Test results (e.g., "Ran 12 unit tests — 11 passed, 1 failed on edge case, fixing next")
+   Do NOT batch multiple actions into one note. Each action gets its own progress note.
+3. **Review your plan after each step**: Check whether the remaining steps still make sense. If you need to adjust the plan, emit an `update_task` with a `progress_note` explaining the change.
 4. **Stay focused**: Work through the plan sequentially. Don't skip steps without noting why.
 
 ## General Guidelines

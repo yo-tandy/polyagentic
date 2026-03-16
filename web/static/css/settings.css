@@ -326,3 +326,53 @@ body {
     font-size: 12px;
     color: var(--text-secondary);
 }
+
+/* Scope badges */
+.scope-badge {
+    font-size: 9px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 2px 6px;
+    border-radius: 3px;
+}
+.scope-badge--global {
+    background: rgba(124, 91, 245, 0.15);
+    color: var(--accent);
+}
+.scope-badge--org {
+    background: rgba(48, 164, 108, 0.15);
+    color: var(--success);
+}
+
+/* Template edit form */
+.template-edit-cell {
+    padding: 16px 12px !important;
+    background: var(--bg);
+}
+.template-edit-form .form-group {
+    margin-bottom: 10px;
+}
+.template-edit-form .form-group label {
+    display: block;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-secondary);
+    margin-bottom: 4px;
+}
+.template-edit-row {
+    display: flex;
+    gap: 10px;
+}
+.template-edit-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+}
+.template-actions {
+    white-space: nowrap;
+}
+.template-actions .settings-btn {
+    margin-left: 4px;
+}

@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -38,7 +39,32 @@ class SubprocessResult:
 
 class SubprocessManager:
 
-    _auth_refreshed: bool = False  # class-level flag to avoid repeated refreshes
+    # Class-level auth coordination — shared across all SubprocessManager instances.
+    # Since the app is single-process async, asyncio.Lock is sufficient.
+    _auth_lock: asyncio.Lock = asyncio.Lock()
+    _auth_refreshed_at: float | None = None   # monotonic timestamp of last success
+    _auth_failed_at: float | None = None      # monotonic timestamp of last failure
+    _AUTH_SUCCESS_TTL: float = 1800            # 30 min: don't re-check if recently OK
+    _AUTH_FAILURE_COOLDOWN: float = 300        # 5 min: don't retry if recently failed
+
+    # Approximate cost per 1M tokens (input, output) for CLI cost estimation.
+    # These are theoretical API rates — actual cost depends on subscription plan.
+    _PRICING = {
+        "opus": (5.00, 25.00),
+        "sonnet": (3.00, 15.00),
+        "haiku": (1.00, 5.00),
+    }
+    _DEFAULT_PRICING = (3.00, 15.00)  # Sonnet as fallback
+
+    @staticmethod
+    def _estimate_cost(
+        model: str, input_tokens: int, output_tokens: int,
+    ) -> float:
+        """Estimate cost from tokens and published pricing."""
+        prices = SubprocessManager._PRICING.get(model, SubprocessManager._DEFAULT_PRICING)
+        input_cost = (input_tokens / 1_000_000) * prices[0]
+        output_cost = (output_tokens / 1_000_000) * prices[1]
+        return round(input_cost + output_cost, 6)
 
     @staticmethod
     def _is_auth_error(text: str) -> bool:
@@ -47,46 +73,82 @@ class SubprocessManager:
         return any(pat in lower for pat in _AUTH_ERROR_PATTERNS)
 
     async def _refresh_auth(self) -> bool:
-        """Attempt to refresh the Claude CLI OAuth token.
+        """Check Claude CLI auth status (never opens browser automatically).
 
-        Runs ``claude auth status`` first — if the CLI reports ``loggedIn: true``
-        the token is likely still valid (or was auto-refreshed).  If not, tries
-        ``claude auth login`` which triggers the interactive OAuth flow.
+        Uses a class-level lock to ensure only one check runs at a time.
+        Concurrent callers wait for the lock and then check whether the
+        holder already verified successfully, avoiding duplicate work.
 
-        Returns True if the refresh looks successful.
+        Returns True only if ``claude auth status`` reports loggedIn=true
+        (i.e. the token auto-refreshed or is still valid).  Returns False
+        if the token is expired — the caller should return [AUTH_ERROR] so
+        the agent transitions to PENDING_REAUTH and the UI prompts the user.
         """
-        logger.info("Attempting Claude CLI auth refresh …")
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                CLAUDE_CLI, "auth", "status", "--output", "json",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=15)
-            status_text = stdout.decode(errors="replace").strip()
-            logger.info("Auth status after refresh attempt: %s", status_text[:200])
+        now = time.monotonic()
 
+        # Fast path (outside lock): if recently verified OK, skip entirely
+        if (cls_at := SubprocessManager._auth_refreshed_at) is not None \
+                and now - cls_at < self._AUTH_SUCCESS_TTL:
+            logger.info("Auth check skipped — last success %.0fs ago", now - cls_at)
+            return True
+
+        async with SubprocessManager._auth_lock:
+            # Re-check after acquiring lock — another coroutine may have
+            # just completed a successful check while we were waiting.
+            now = time.monotonic()
+            if (cls_at := SubprocessManager._auth_refreshed_at) is not None \
+                    and now - cls_at < self._AUTH_SUCCESS_TTL:
+                logger.info("Auth already verified by another agent (%.0fs ago)", now - cls_at)
+                return True
+
+            # Cooldown after failure — don't keep retrying
+            if (fail_at := SubprocessManager._auth_failed_at) is not None \
+                    and now - fail_at < self._AUTH_FAILURE_COOLDOWN:
+                remaining = self._AUTH_FAILURE_COOLDOWN - (now - fail_at)
+                logger.warning(
+                    "Auth check in cooldown (%.0fs remaining) — returning auth error",
+                    remaining,
+                )
+                return False
+
+            # === Actual auth check (only one coroutine reaches here) ===
+            logger.info("Checking Claude CLI auth status …")
             try:
-                status = json.loads(status_text)
-                if status.get("loggedIn"):
-                    logger.info("Claude CLI reports loggedIn=true — token refreshed")
-                    return True
-            except json.JSONDecodeError:
-                pass
+                proc = await asyncio.create_subprocess_exec(
+                    CLAUDE_CLI, "auth", "status", "--output", "json",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=15)
+                status_text = stdout.decode(errors="replace").strip()
+                logger.info("Auth status: %s", status_text[:200])
 
-            # Token still invalid — try an explicit login
-            logger.warning("Claude CLI not logged in, attempting `auth login` …")
-            proc2 = await asyncio.create_subprocess_exec(
-                CLAUDE_CLI, "auth", "login",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            await asyncio.wait_for(proc2.communicate(), timeout=30)
-            return proc2.returncode == 0
+                try:
+                    status = json.loads(status_text)
+                    if status.get("loggedIn"):
+                        logger.info("Claude CLI reports loggedIn=true — token valid")
+                        SubprocessManager._auth_refreshed_at = time.monotonic()
+                        return True
+                except json.JSONDecodeError:
+                    pass
 
-        except Exception as e:
-            logger.error("Auth refresh failed: %s", e)
-            return False
+                # Token expired / not logged in — do NOT open browser automatically.
+                # Return False so the agent enters PENDING_REAUTH state.
+                logger.warning(
+                    "Claude CLI not logged in — auth required. "
+                    "Agents will enter PENDING_REAUTH state."
+                )
+                SubprocessManager._auth_failed_at = time.monotonic()
+                return False
+
+            except asyncio.TimeoutError:
+                logger.error("Auth status check timed out")
+                SubprocessManager._auth_failed_at = time.monotonic()
+                return False
+            except Exception as e:
+                logger.error("Auth check failed: %s", e)
+                SubprocessManager._auth_failed_at = time.monotonic()
+                return False
 
     def _build_claude_args(
         self,
@@ -212,28 +274,45 @@ class SubprocessManager:
         stderr_text = stderr.decode(errors="replace").strip()
         raw_stdout = stdout.decode(errors="replace").strip()
 
-        # --- Auth-error detection & automatic retry -----------------------
-        # Check all available output for authentication errors. If found,
-        # refresh the OAuth token and retry the invocation once.
+        # --- Auth-error detection & check ---------------------------------
+        # Check output for authentication errors.  If found, verify whether
+        # the token auto-refreshed (``_refresh_auth`` only checks status,
+        # never opens a browser).  If still invalid → return [AUTH_ERROR]
+        # so the agent enters PENDING_REAUTH and the UI prompts the user.
         if not _auth_retry:
             combined_output = f"{raw_stdout}\n{stderr_text}"
             if self._is_auth_error(combined_output):
                 logger.warning(
-                    "Auth error detected (rc=%d), attempting token refresh and retry …",
+                    "Auth error detected (rc=%d), checking auth status …",
                     returncode,
                 )
-                await self._refresh_auth()
-                return await self.invoke(
-                    prompt=prompt,
-                    system_prompt=system_prompt,
-                    model=model,
-                    allowed_tools=allowed_tools,
+                refreshed = await self._refresh_auth()
+                if refreshed:
+                    return await self.invoke(
+                        prompt=prompt,
+                        system_prompt=system_prompt,
+                        model=model,
+                        allowed_tools=allowed_tools,
+                        session_id=session_id,
+                        working_dir=working_dir,
+                        timeout=timeout,
+                        max_budget_usd=max_budget_usd,
+                        mcp_config_path=mcp_config_path,
+                        _auth_retry=True,
+                    )
+                # Auth truly expired — return error for PENDING_REAUTH
+                logger.error("Auth expired — agent should enter PENDING_REAUTH")
+                return SubprocessResult(
+                    result_text=(
+                        "[AUTH_ERROR] Claude CLI authentication has expired. "
+                        "Please re-authenticate via the dashboard."
+                    ),
                     session_id=session_id,
-                    working_dir=working_dir,
-                    timeout=timeout,
-                    max_budget_usd=max_budget_usd,
-                    mcp_config_path=mcp_config_path,
-                    _auth_retry=True,  # prevent infinite loop
+                    cost_usd=None,
+                    duration_ms=None,
+                    input_tokens=None,
+                    output_tokens=None,
+                    is_error=True,
                 )
         # ------------------------------------------------------------------
 
@@ -248,19 +327,38 @@ class SubprocessManager:
                         parsed = self._parse_output(raw_stdout, session_id)
                         # Even inside JSON output, check for auth errors
                         if not _auth_retry and self._is_auth_error(parsed.result_text):
-                            logger.warning("Auth error in JSON result, refreshing and retrying …")
-                            await self._refresh_auth()
-                            return await self.invoke(
-                                prompt=prompt,
-                                system_prompt=system_prompt,
-                                model=model,
-                                allowed_tools=allowed_tools,
+                            logger.warning("Auth error in JSON result, checking auth status …")
+                            refreshed = await self._refresh_auth()
+                            if refreshed:
+                                return await self.invoke(
+                                    prompt=prompt,
+                                    system_prompt=system_prompt,
+                                    model=model,
+                                    allowed_tools=allowed_tools,
+                                    session_id=session_id,
+                                    working_dir=working_dir,
+                                    timeout=timeout,
+                                    max_budget_usd=max_budget_usd,
+                                    mcp_config_path=mcp_config_path,
+                                    _auth_retry=True,
+                                )
+                            logger.error("Auth expired (JSON path) — agent should enter PENDING_REAUTH")
+                            return SubprocessResult(
+                                result_text=(
+                                    "[AUTH_ERROR] Claude CLI authentication has expired. "
+                                    "Please re-authenticate via the dashboard."
+                                ),
                                 session_id=session_id,
-                                working_dir=working_dir,
-                                timeout=timeout,
-                                max_budget_usd=max_budget_usd,
-                                mcp_config_path=mcp_config_path,
-                                _auth_retry=True,
+                                cost_usd=None,
+                                duration_ms=None,
+                                input_tokens=None,
+                                output_tokens=None,
+                                is_error=True,
+                            )
+                        # Override CLI-reported cost with token-based estimate
+                        if parsed.input_tokens or parsed.output_tokens:
+                            parsed.cost_usd = self._estimate_cost(
+                                model, parsed.input_tokens or 0, parsed.output_tokens or 0,
                             )
                         return parsed
                 except json.JSONDecodeError:
@@ -281,7 +379,13 @@ class SubprocessManager:
             logger.debug("Claude CLI stderr: %s", stderr_text[:200])
 
         logger.info("Claude CLI returned %d bytes (rc=0)", len(raw_stdout))
-        return self._parse_output(raw_stdout, session_id)
+        result = self._parse_output(raw_stdout, session_id)
+        # Override CLI-reported cost with token-based estimate
+        if result.input_tokens or result.output_tokens:
+            result.cost_usd = self._estimate_cost(
+                model, result.input_tokens or 0, result.output_tokens or 0,
+            )
+        return result
 
     def _parse_output(self, raw: str, fallback_session_id: str | None) -> SubprocessResult:
         try:

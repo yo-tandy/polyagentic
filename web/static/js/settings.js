@@ -13,6 +13,7 @@ const Settings = {
             this.loadInvites(),
             this.loadApiKeys(),
         ]);
+        await this.loadTemplates();
         this.bindEvents();
     },
 
@@ -278,6 +279,131 @@ const Settings = {
             }
         } catch {
             this.showStatus('invite-status', 'Failed to delete', 'error');
+        }
+    },
+
+    // ── Agent Repository ──
+
+    async loadTemplates() {
+        const data = await this.safeFetch('/api/templates', { templates: [] });
+        const container = document.getElementById('repo-templates-container');
+        const templates = data.templates || [];
+
+        if (templates.length === 0) {
+            container.innerHTML = '<div class="settings-empty">No agent templates in the repository</div>';
+            return;
+        }
+
+        let html = `<table class="members-table">
+            <thead><tr><th>Name</th><th>Title</th><th>Scope</th><th>Model</th><th>Actions</th></tr></thead>
+            <tbody>`;
+        for (const t of templates) {
+            const orgLabel = this.org?.name ? this.esc(this.org.name) : 'Org';
+            const scopeBadge = t.scope === 'global'
+                ? '<span class="scope-badge scope-badge--global">Global</span>'
+                : `<span class="scope-badge scope-badge--org">${orgLabel}</span>`;
+            html += `<tr data-template-id="${this.esc(t.id)}">
+                <td>${this.esc(t.name)}</td>
+                <td>${this.esc(t.title)}</td>
+                <td>${scopeBadge}</td>
+                <td>${this.esc(t.model || 'sonnet')}</td>
+                <td class="template-actions">
+                    <button class="settings-btn settings-btn--small settings-btn--secondary edit-template"
+                            data-id="${this.esc(t.id)}">Edit</button>
+                    <button class="settings-btn settings-btn--small settings-btn--danger delete-template"
+                            data-id="${this.esc(t.id)}">Delete</button>
+                </td>
+            </tr>`;
+        }
+        html += '</tbody></table>';
+        container.innerHTML = html;
+
+        // Bind edit handlers
+        container.querySelectorAll('.edit-template').forEach(btn => {
+            btn.addEventListener('click', () => this.editTemplate(btn.dataset.id));
+        });
+        // Bind delete handlers
+        container.querySelectorAll('.delete-template').forEach(btn => {
+            btn.addEventListener('click', () => this.deleteTemplate(btn.dataset.id));
+        });
+    },
+
+    async editTemplate(id) {
+        const data = await this.safeFetch(`/api/templates/${id}`, null);
+        if (!data) return;
+
+        const row = document.querySelector(`tr[data-template-id="${id}"]`);
+        if (!row) return;
+
+        // Replace table row with edit form
+        const editRow = document.createElement('tr');
+        editRow.dataset.templateId = id;
+        editRow.innerHTML = `
+            <td colspan="5" class="template-edit-cell">
+                <div class="template-edit-form">
+                    <div class="template-edit-row">
+                        <div class="form-group" style="flex:1">
+                            <label>Name</label>
+                            <input type="text" class="settings-field__input" id="edit-tmpl-name" value="${this.esc(data.name || '')}">
+                        </div>
+                        <div class="form-group" style="flex:1">
+                            <label>Title</label>
+                            <input type="text" class="settings-field__input" id="edit-tmpl-title" value="${this.esc(data.title || '')}">
+                        </div>
+                        <div class="form-group" style="flex:0 0 200px">
+                            <label>Scope</label>
+                            <select class="settings-field__input" id="edit-tmpl-scope">
+                                <option value="org" ${data.scope === 'org' ? 'selected' : ''}>My organization${this.org?.name ? ' (' + this.esc(this.org.name) + ')' : ''}</option>
+                                <option value="global" ${data.scope === 'global' ? 'selected' : ''}>Global</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Personality</label>
+                        <textarea class="settings-field__input" id="edit-tmpl-personality" rows="3">${this.esc(data.personality || '')}</textarea>
+                    </div>
+                    <div class="template-edit-actions">
+                        <button class="settings-btn settings-btn--primary" id="save-tmpl-btn">Save</button>
+                        <button class="settings-btn settings-btn--secondary" id="cancel-tmpl-btn">Cancel</button>
+                    </div>
+                </div>
+            </td>`;
+        row.replaceWith(editRow);
+
+        document.getElementById('save-tmpl-btn').addEventListener('click', async () => {
+            const name = document.getElementById('edit-tmpl-name')?.value?.trim();
+            const title = document.getElementById('edit-tmpl-title')?.value?.trim();
+            const personality = document.getElementById('edit-tmpl-personality')?.value?.trim();
+            const scope = document.getElementById('edit-tmpl-scope')?.value;
+            if (!name || !title) return;
+            try {
+                const res = await fetch(`/api/templates/${id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name, title, personality, scope }),
+                });
+                if (res.ok) {
+                    await this.loadTemplates();
+                }
+            } catch (err) {
+                console.error('Failed to update template:', err);
+            }
+        });
+
+        document.getElementById('cancel-tmpl-btn').addEventListener('click', () => {
+            this.loadTemplates();
+        });
+    },
+
+    async deleteTemplate(id) {
+        if (!confirm('Delete this agent template? This cannot be undone.')) return;
+        try {
+            const res = await fetch(`/api/templates/${id}`, { method: 'DELETE' });
+            if (res.ok) {
+                await this.loadTemplates();
+            }
+        } catch (err) {
+            console.error('Failed to delete template:', err);
         }
     },
 

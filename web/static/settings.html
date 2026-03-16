@@ -21,6 +21,7 @@
     <div class="settings-layout">
         <nav class="settings-tabs">
             <button class="settings-tab active" data-tab="org">Organization</button>
+            <button class="settings-tab" data-tab="repo">Agent Repository</button>
             <button class="settings-tab" data-tab="profile">User Profile</button>
         </nav>
 
@@ -94,6 +95,16 @@
                         </button>
                     </div>
                     <div class="settings-status" id="invite-status"></div>
+                </div>
+            </div>
+
+            <!-- Agent Repository Tab -->
+            <div class="settings-panel" id="panel-repo">
+                <div class="settings-section">
+                    <div class="settings-section__title">Agent Templates</div>
+                    <div id="repo-templates-container">
+                        <div class="settings-empty">Loading templates...</div>
+                    </div>
                 </div>
             </div>
 

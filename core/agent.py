@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import time
 import json
 import logging
 import re
@@ -39,6 +40,7 @@ class AgentStatus(str, Enum):
     ERROR = "error"
     OFFLINE = "offline"
     SESSION_PAUSED = "session-paused"
+    PENDING_REAUTH = "pending-reauth"
 
 
 class Agent:
@@ -53,6 +55,10 @@ class Agent:
     # Max "other team tasks" shown in prompt context.
     # None = unlimited (for management agents that need full board visibility).
     max_task_context_items: int | None = MAX_TASK_CONTEXT_ITEMS
+
+    # Class-level flag to deduplicate auth_required WS events.
+    # Reset when reauth completes (via the /sessions/reauth endpoint).
+    _auth_event_broadcast: bool = False
 
     def __init__(
         self,
@@ -102,6 +108,8 @@ class Agent:
         self.current_task_id: str | None = None
         self.messages_processed = 0
         self.last_error: str | None = None
+        self.activity: str | None = None  # sub-status: "model", "processing"
+        self.last_processed_at: float = 0  # monotonic timestamp, used for nudge cooldown
         self.message_queue: asyncio.Queue[Message] = asyncio.Queue()
 
         if execution_mode == "container" and container_name:
@@ -227,7 +235,9 @@ class Agent:
                     self.message_queue.get(), timeout=1.0
                 )
             except asyncio.TimeoutError:
-                # While idle, reflect session-paused state in status
+                # While idle, reflect session-paused or pending-reauth state
+                if self.status == AgentStatus.PENDING_REAUTH:
+                    continue  # stay in PENDING_REAUTH until reauth endpoint clears it
                 if (self.use_session and self._session_store
                         and self._session_store.is_paused(self.agent_id)):
                     if self.status != AgentStatus.SESSION_PAUSED:
@@ -253,6 +263,7 @@ class Agent:
                 await self._session_store.invalidate_session(self.agent_id)
 
             self.status = AgentStatus.WORKING
+            self.activity = "model"
             await self._broadcast_status()
 
             # Auto-transition: mark task in_progress when agent starts working
@@ -273,6 +284,43 @@ class Agent:
 
             try:
                 responses = await self.process_message(msg)
+
+                # --- AUTH_ERROR detection: enter PENDING_REAUTH ---------------
+                is_auth_error = any(
+                    r.content and "[AUTH_ERROR]" in r.content for r in responses
+                )
+                if is_auth_error:
+                    logger.warning(
+                        "Agent %s received AUTH_ERROR — entering PENDING_REAUTH",
+                        self.agent_id,
+                    )
+                    self.activity = None
+                    self.status = AgentStatus.PENDING_REAUTH
+                    await self._broadcast_status()
+
+                    # Broadcast auth_required event (deduplicated per class)
+                    if self._broker and not Agent._auth_event_broadcast:
+                        Agent._auth_event_broadcast = True
+                        await self._broker.broadcast_event({
+                            "event_type": "auth_required",
+                            "data": {
+                                "agent_id": self.agent_id,
+                                "message": "Claude CLI authentication has expired.",
+                            },
+                        })
+
+                    # Re-queue the original message so it retries after re-auth
+                    await self.message_queue.put(msg)
+
+                    # Hold loop: wait until status is changed by the reauth endpoint
+                    while self._running and self.status == AgentStatus.PENDING_REAUTH:
+                        await asyncio.sleep(1.0)
+
+                    continue  # retry the re-queued message
+                # --------------------------------------------------------------
+
+                self.activity = "processing"
+                await self._broadcast_status()
 
                 # Auto review notification: if task moved to REVIEW, notify reviewer
                 if msg.task_id and self._task_board:
@@ -413,6 +461,7 @@ class Agent:
             except Exception as exc:
                 logger.exception("Agent %s error processing message %s", self.agent_id, msg.id)
                 self.last_error = f"{type(exc).__name__}: {exc}"
+                self.activity = None
                 self.status = AgentStatus.ERROR
                 await self._broadcast_status()
 
@@ -436,11 +485,18 @@ class Agent:
             finally:
                 self.current_task_id = None
                 self._current_task_plan = None
+                self.activity = None
                 if self._action_handler:
                     self._action_handler.current_task_id = None
                 self.messages_processed += 1
-                if self.status not in (AgentStatus.ERROR, AgentStatus.SESSION_PAUSED):
-                    self.status = AgentStatus.IDLE
+                self.last_processed_at = time.monotonic()
+                if self.status not in (AgentStatus.ERROR, AgentStatus.SESSION_PAUSED, AgentStatus.PENDING_REAUTH):
+                    # Check if session was paused while we were working
+                    if (self.use_session and self._session_store
+                            and self._session_store.is_paused(self.agent_id)):
+                        self.status = AgentStatus.SESSION_PAUSED
+                    else:
+                        self.status = AgentStatus.IDLE
                     await self._broadcast_status()
 
     async def _run_planning_phase(self, task, msg: Message) -> None:
@@ -516,6 +572,26 @@ class Agent:
             mcp_config_path=self.mcp_config_path,
         )
 
+        # --- Timeout retry with health check ---
+        if result.is_error and "[TIMEOUT]" in result.result_text:
+            logger.warning("Agent %s timed out, running health check", self.agent_id)
+            if await self._check_model_health():
+                logger.info("Agent %s health check passed, retrying", self.agent_id)
+                result = await self._provider.invoke(
+                    prompt=prompt, system_prompt=system_prompt,
+                    model=self.model, allowed_tools=self.allowed_tools,
+                    session_id=session_id, working_dir=self.working_dir,
+                    timeout=self.timeout, max_budget_usd=self.max_budget_usd,
+                    mcp_config_path=self.mcp_config_path,
+                )
+                if result.is_error and "[TIMEOUT]" in result.result_text:
+                    logger.warning("Agent %s second timeout, health-checking again", self.agent_id)
+                    if await self._check_model_health():
+                        # Model is fine — scope too large, escalate
+                        logger.warning("Agent %s: scope too large, escalating to manny", self.agent_id)
+                        return await self._escalate_scope_too_large(msg)
+            # Non-timeout errors or connection failures fall through to normal handling
+
         # Retry on stale session: clear the session and invoke fresh
         if result.is_error and session_id and "No conversation found" in result.result_text:
             logger.warning(
@@ -587,6 +663,63 @@ class Agent:
         validated_text = await self._validate_result_actions(result.result_text)
 
         return await self._parse_response(validated_text, msg)
+
+    async def _check_model_health(self) -> bool:
+        """Quick health check — invoke model with trivial prompt, short timeout."""
+        try:
+            result = await self._provider.invoke(
+                prompt="Reply with exactly: OK",
+                system_prompt="You are a health check. Reply with OK.",
+                model=self.model,
+                allowed_tools="",
+                session_id=None,
+                working_dir=self.working_dir,
+                timeout=60,
+            )
+            return not result.is_error
+        except Exception:
+            return False
+
+    async def _escalate_scope_too_large(self, msg: Message) -> list[Message]:
+        """Escalate a timed-out task to Manny for decomposition."""
+        task_info = ""
+        if msg.task_id and self._task_board:
+            task = self._task_board.get_task(msg.task_id)
+            if task:
+                task_info = (
+                    f"\n\nOriginal task:\n"
+                    f"- ID: {task.id}\n"
+                    f"- Title: {task.title}\n"
+                    f"- Assignee: {task.assignee}\n"
+                    f"- Phase: {task.phase_id or 'none'}\n"
+                    f"- Labels: {', '.join(task.labels) if task.labels else 'none'}\n"
+                    f"- Description: {task.description[:500]}"
+                )
+                await self._task_board.update_task(
+                    task.id,
+                    status=TaskStatus.DONE,
+                    outcome="rejected",
+                    _agent_id=self.agent_id,
+                    progress_note=(
+                        "Task timed out twice. Health checks confirmed model connectivity is fine. "
+                        "Scope is too large for a single invocation — escalating to Manny for decomposition."
+                    ),
+                )
+
+        return [Message(
+            sender=self.agent_id,
+            recipient="manny",
+            type=MessageType.SYSTEM,
+            content=(
+                f"SCOPE TOO LARGE: My task timed out twice and health checks confirm "
+                f"the model connection is healthy. The task scope is too large for a single "
+                f"model invocation. Please break this into 2-4 smaller focused sub-tasks "
+                f"and assign them all to me ({self.agent_id}). "
+                f"Use initial_status 'pending' so I can start immediately. "
+                f"The original task has been marked as rejected.{task_info}"
+            ),
+            task_id=msg.task_id,
+        )]
 
     # ------------------------------------------------------------------
     # Delegation to PromptBuilder
@@ -815,6 +948,8 @@ class Agent:
                 "status": self.status.value,
                 "current_task_id": self.current_task_id,
             }
+            if self.activity:
+                data["activity"] = self.activity
             if self.last_error:
                 data["last_error"] = self.last_error
             await self._broker.broadcast_event({
@@ -832,6 +967,8 @@ class Agent:
             "messages_processed": self.messages_processed,
             "model": self.model,
         }
+        if self.activity:
+            info["activity"] = self.activity
         if self.last_error:
             info["last_error"] = self.last_error
         return info

@@ -29,6 +29,8 @@ DEFAULT_CONFIG_SEEDS: list[dict] = [
      "value_type": "string", "description": "Default Claude model"},
     {"scope": "system", "key": "DEMO_PAUSE_INTERVAL", "value": "5",
      "value_type": "int", "description": "Task count trigger for demo pause"},
+    {"scope": "system", "key": "NUDGE_INTERVAL_SECONDS", "value": "20",
+     "value_type": "int", "description": "Seconds between idle-agent nudge checks"},
     {"scope": "system", "key": "MAX_TASK_CONTEXT_ITEMS", "value": "20",
      "value_type": "int", "description": "Default max tasks shown to agents"},
     {"scope": "system", "key": "MAX_ACTIVITY_LOG", "value": "500",

@@ -118,10 +118,11 @@ DEFAULT_ROLE_SEEDS: list[dict] = [
             "registry", "git_manager", "session_store",
             "workspace_path", "messages_dir", "worktrees_dir",
             "container_manager", "project_store", "team_structure",
-            "mcp_manager", "mcp_registry",
+            "mcp_manager", "mcp_registry", "template_repo",
         ],
         "allowed_actions": UNIVERSAL_ACTIONS + [
-            "recruit_agent", "search_mcp_registry", "deploy_mcp",
+            "recruit_agent", "search_agent_repository",
+            "search_mcp_registry", "deploy_mcp",
         ],
     },
     {
@@ -133,7 +134,7 @@ DEFAULT_ROLE_SEEDS: list[dict] = [
         "max_task_context_items": 20,
         "timeout": 300,
         "max_budget_usd": None,
-        "deps": [],
+        "deps": ["template_repo"],
         "allowed_actions": UNIVERSAL_ACTIONS + ["request_capability"],
     },
 ]

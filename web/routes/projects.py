@@ -78,6 +78,8 @@ async def activate_project(project_id: str, request: Request):
         request.app.state.knowledge_base = new_state.get("knowledge_base")
         request.app.state.container_manager = new_state.get("container_manager")
         request.app.state.conversation_manager = new_state.get("conversation_manager")
+        request.app.state.team_structure = new_state.get("team_structure")
+        request.app.state.template_repo = new_state.get("template_repo")
 
         logger.info("Switched to project '%s'", project_id)
         return {"status": "activated", "project": project}

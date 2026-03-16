@@ -31,6 +31,9 @@ class RecruitAgent(BaseAction):
                      enum=["opus", "sonnet", "haiku"]),
         ActionField("allowed_tools", "string",
                      description="Tool permissions"),
+        ActionField("template_id", "string",
+                     description="Template ID from agent repository "
+                                 "(recruit from existing template)"),
     ]
 
     async def execute(
@@ -48,9 +51,31 @@ class RecruitAgent(BaseAction):
         from web.services.agent_service import create_and_register_agent
         from config import DEFAULT_MODEL, CLAUDE_ALLOWED_TOOLS_DEV
 
-        name = action.get("name", "")
-        role = action.get("role", "")
-        sys_prompt = action.get("system_prompt", f"You are a {role}.")
+        # ── Template lookup ──
+        template_repo = agent.deps.get("template_repo")
+        template = None
+        template_id = action.get("template_id")
+        if template_id and template_repo:
+            template = await template_repo.get(template_id)
+            if template:
+                logger.info(
+                    "Recruiting from template %s (%s)",
+                    template.id, template.name,
+                )
+
+        # Resolve fields: action overrides > template defaults > fallbacks
+        if template:
+            name = action.get("name") or template.name.lower().replace(" ", "_")
+            role = action.get("role") or template.title
+            sys_prompt = action.get("system_prompt") or template.personality or f"You are a {role}."
+            model_val = action.get("model") or template.model or DEFAULT_MODEL
+            tools_val = action.get("allowed_tools") or template.allowed_tools or CLAUDE_ALLOWED_TOOLS_DEV
+        else:
+            name = action.get("name", "")
+            role = action.get("role", "")
+            sys_prompt = action.get("system_prompt", f"You are a {role}.")
+            model_val = action.get("model", DEFAULT_MODEL)
+            tools_val = action.get("allowed_tools", CLAUDE_ALLOWED_TOOLS_DEV)
 
         if not name:
             return []
@@ -65,9 +90,8 @@ class RecruitAgent(BaseAction):
                 name=name,
                 role=role,
                 system_prompt=sys_prompt,
-                model=action.get("model", DEFAULT_MODEL),
-                allowed_tools=action.get("allowed_tools",
-                                         CLAUDE_ALLOWED_TOOLS_DEV),
+                model=model_val,
+                allowed_tools=tools_val,
                 registry=registry,
                 broker=agent._broker,
                 session_store=agent.deps.get("session_store"),
@@ -87,6 +111,11 @@ class RecruitAgent(BaseAction):
                 "Agent %s recruited new agent: %s (%s)",
                 agent.agent_id, name, role,
             )
+
+            # Link the template to this agent for future personality sync
+            if template and template_repo:
+                await template_repo.update(template.id, source_agent_id=name)
+
         except Exception:
             logger.exception("Failed to recruit agent %s", name)
 

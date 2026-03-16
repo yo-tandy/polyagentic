@@ -1,6 +1,7 @@
 const AgentPanel = {
     container: null,
     selectedAgent: null,
+    _agents: [],
 
     init(containerId) {
         this.container = document.getElementById(containerId);
@@ -15,15 +16,32 @@ const AgentPanel = {
                 if (e.target === overlay) this._hideMemoryModal();
             });
         }
+
+        // Add-to-repo modal close handler
+        const repoCloseBtn = document.getElementById('add-to-repo-close');
+        if (repoCloseBtn) repoCloseBtn.addEventListener('click', () => this._hideRepoModal());
+
+        const repoOverlay = document.getElementById('add-to-repo-modal');
+        if (repoOverlay) {
+            repoOverlay.addEventListener('click', (e) => {
+                if (e.target === repoOverlay) this._hideRepoModal();
+            });
+        }
+
+        const repoSaveBtn = document.getElementById('repo-add-save');
+        if (repoSaveBtn) repoSaveBtn.addEventListener('click', () => this._saveToRepo());
     },
 
     render(agents) {
         if (!this.container) return;
+        this._agents = agents;
         this.container.innerHTML = agents.map(a => `
             <div class="agent-card" data-agent-id="${a.id}">
                 <div class="agent-card__header">
                     <div class="agent-card__info">
-                        <div class="agent-card__name">${a.name}</div>
+                        <div class="agent-card__name">
+                            ${a.name}${(!a.is_fixed && !a.in_repository) ? '<span class="agent-card__diamond" title="Not in repository — click to add">&#x25C6;</span>' : ''}
+                        </div>
                         <div class="agent-card__role">${a.role}</div>
                     </div>
                     <div class="agent-card__actions">
@@ -32,7 +50,7 @@ const AgentPanel = {
                         <button class="agent-card__status-btn" data-agent-id="${a.id}" title="Request status report">?</button>
                     </div>
                 </div>
-                <span class="agent-card__status status--${a.status}">${a.status}</span>
+                <span class="agent-card__status status--${a.status}">${a.status}${a.activity ? `<span class="agent-card__activity activity--${a.activity}">${AgentPanel._activityIcon(a.activity)}</span>` : ''}</span>
                 ${a.last_error ? `<div class="agent-card__error" title="${a.last_error.replace(/"/g, '&quot;')}">${a.last_error}</div>` : ''}
             </div>
         `).join('');
@@ -40,9 +58,15 @@ const AgentPanel = {
         // Bind click handlers for agent selection
         this.container.querySelectorAll('.agent-card').forEach(card => {
             card.addEventListener('click', (e) => {
-                // Don't trigger selection if clicking buttons
-                if (e.target.closest('.agent-card__status-btn') || e.target.closest('.agent-card__memory-btn') || e.target.closest('.agent-card__chat-btn') || e.target.closest('.agent-card__error')) return;
+                // Don't trigger selection if clicking buttons or diamond
+                if (e.target.closest('.agent-card__status-btn') || e.target.closest('.agent-card__memory-btn') || e.target.closest('.agent-card__chat-btn') || e.target.closest('.agent-card__error') || e.target.closest('.agent-card__diamond')) return;
                 const agentId = card.dataset.agentId;
+                // If agent is pending re-auth, show the re-auth modal
+                const badge = card.querySelector('.agent-card__status');
+                if (badge && badge.classList.contains('status--pending-reauth')) {
+                    App.showReauthModal();
+                    return;
+                }
                 this._toggleSelect(agentId);
             });
         });
@@ -71,6 +95,17 @@ const AgentPanel = {
                 e.stopPropagation();
                 const agentId = btn.dataset.agentId;
                 this._startChat(agentId, btn);
+            });
+        });
+
+        // Bind blue diamond handlers
+        this.container.querySelectorAll('.agent-card__diamond').forEach(diamond => {
+            diamond.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const card = diamond.closest('.agent-card');
+                const agentId = card.dataset.agentId;
+                const agent = this._agents.find(a => a.id === agentId);
+                if (agent) this._showAddToRepoDialog(agent);
             });
         });
 
@@ -188,13 +223,108 @@ const AgentPanel = {
         if (modal) modal.classList.remove('active');
     },
 
-    updateStatus(agentId, status, lastError) {
+    // ── Add-to-Repository Dialog ──
+
+    async _showAddToRepoDialog(agent) {
+        const nameEl = document.getElementById('repo-add-name');
+        const titleEl = document.getElementById('repo-add-title');
+        const personalityEl = document.getElementById('repo-add-personality');
+        const scopeEl = document.getElementById('repo-add-scope');
+        const agentIdEl = document.getElementById('repo-add-agent-id');
+
+        if (nameEl) nameEl.value = agent.name || '';
+        if (titleEl) titleEl.value = agent.role || '';
+        if (agentIdEl) agentIdEl.value = agent.id;
+
+        // Populate scope dropdown with org name
+        if (scopeEl) {
+            scopeEl.value = 'org';
+            try {
+                const orgRes = await safeFetch('/api/orgs/current', {});
+                const orgOpt = scopeEl.querySelector('option[value="org"]');
+                if (orgOpt && orgRes.name) {
+                    orgOpt.textContent = `My organization (${orgRes.name})`;
+                }
+            } catch { /* keep default label */ }
+        }
+
+        // Pre-fill personality from memory API
+        if (personalityEl) {
+            personalityEl.value = 'Loading...';
+            try {
+                const res = await safeFetch(`/api/memory/${agent.id}`, {});
+                personalityEl.value = res.personality || '';
+            } catch {
+                personalityEl.value = '';
+            }
+        }
+
+        const modal = document.getElementById('add-to-repo-modal');
+        if (modal) modal.classList.add('active');
+    },
+
+    _hideRepoModal() {
+        const modal = document.getElementById('add-to-repo-modal');
+        if (modal) modal.classList.remove('active');
+    },
+
+    async _saveToRepo() {
+        const name = document.getElementById('repo-add-name')?.value?.trim();
+        const title = document.getElementById('repo-add-title')?.value?.trim();
+        const personality = document.getElementById('repo-add-personality')?.value?.trim();
+        const scope = document.getElementById('repo-add-scope')?.value || 'org';
+        const sourceAgentId = document.getElementById('repo-add-agent-id')?.value;
+
+        if (!name || !title) return;
+
+        const saveBtn = document.getElementById('repo-add-save');
+        if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Saving...'; }
+
+        try {
+            const res = await fetch('/api/templates', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    name, title, personality, scope,
+                    source_agent_id: sourceAgentId,
+                }),
+            });
+            if (res.ok) {
+                this._hideRepoModal();
+                // Refresh agents to clear the diamond
+                if (typeof App !== 'undefined' && App.refreshAgents) {
+                    App.refreshAgents();
+                }
+            } else {
+                const data = await res.json().catch(() => ({}));
+                console.error('Failed to save template:', data.error || res.status);
+            }
+        } catch (err) {
+            console.error('Failed to save template:', err);
+        }
+
+        if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'Save to Repository'; }
+    },
+
+    _activityIcon(activity) {
+        const icons = {
+            'model': ' \u2726',      // ✦ four-pointed star (thinking/waiting on model)
+            'processing': ' \u2699', // ⚙ gear (processing response)
+        };
+        return icons[activity] || '';
+    },
+
+    updateStatus(agentId, status, lastError, activity) {
         const card = this.container?.querySelector(`[data-agent-id="${agentId}"]`);
         if (!card) return;
         const badge = card.querySelector('.agent-card__status');
         if (badge) {
             badge.className = `agent-card__status status--${status}`;
-            badge.textContent = status;
+            let activityHtml = '';
+            if (activity) {
+                activityHtml = `<span class="agent-card__activity activity--${activity}">${this._activityIcon(activity)}</span>`;
+            }
+            badge.innerHTML = status + activityHtml;
         }
         // Update error bar
         let errorEl = card.querySelector('.agent-card__error');

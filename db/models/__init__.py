@@ -20,3 +20,4 @@ from db.models.user import User  # noqa: F401
 from db.models.invite import InviteLink  # noqa: F401
 from db.models.mcp_server import MCPServer  # noqa: F401
 from db.models.action_error import ActionError  # noqa: F401
+from db.models.agent_template import AgentTemplate  # noqa: F401

@@ -60,6 +60,7 @@ from db.repositories.org_repo import OrgRepository
 from db.repositories.invite_repo import InviteRepository
 from db.repositories.mcp_repo import MCPRepository
 from db.repositories.action_error_repo import ActionErrorRepository
+from db.repositories.agent_template_repo import AgentTemplateRepository
 from core.mcp_registry import MCPRegistry
 from core.mcp_manager import MCPManager
 from core.providers.factory import create_provider, FallbackProvider
@@ -166,6 +167,7 @@ class ProjectLifecycleManager:
         invite_repo = InviteRepository(self._sf)
         mcp_repo = MCPRepository(self._sf)
         action_error_repo = ActionErrorRepository(self._sf)
+        template_repo = AgentTemplateRepository(self._sf)
 
         # Ensure default org exists
         await org_repo.ensure_default()
@@ -285,6 +287,7 @@ class ProjectLifecycleManager:
             "team_structure": team_structure,
             "mcp_manager": mcp_manager,
             "mcp_registry": mcp_registry,
+            "template_repo": template_repo,
         }
 
         # Apply model overrides from team_config.yaml (backward compat)
@@ -547,6 +550,7 @@ class ProjectLifecycleManager:
             "mcp_manager": mcp_manager,
             "mcp_registry": mcp_registry,
             "action_error_repo": action_error_repo,
+            "template_repo": template_repo,
         }
 
 

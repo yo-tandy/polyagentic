@@ -30,6 +30,17 @@ const AgentPanel = {
 
         const repoSaveBtn = document.getElementById('repo-add-save');
         if (repoSaveBtn) repoSaveBtn.addEventListener('click', () => this._saveToRepo());
+
+        // Diagnostics modal close handler
+        const diagCloseBtn = document.getElementById('diagnostics-modal-close');
+        if (diagCloseBtn) diagCloseBtn.addEventListener('click', () => this._hideDiagnosticsModal());
+
+        const diagOverlay = document.getElementById('diagnostics-modal');
+        if (diagOverlay) {
+            diagOverlay.addEventListener('click', (e) => {
+                if (e.target === diagOverlay) this._hideDiagnosticsModal();
+            });
+        }
     },
 
     render(agents) {
@@ -71,12 +82,12 @@ const AgentPanel = {
             });
         });
 
-        // Bind status button handlers
+        // Bind status button handlers — opens diagnostics modal
         this.container.querySelectorAll('.agent-card__status-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 const agentId = btn.dataset.agentId;
-                this._requestStatus(agentId, btn);
+                this._showDiagnostics(agentId);
             });
         });
 
@@ -220,6 +231,249 @@ const AgentPanel = {
 
     _hideMemoryModal() {
         const modal = document.getElementById('memory-modal');
+        if (modal) modal.classList.remove('active');
+    },
+
+    // ── Agent Diagnostics Modal ──
+
+    async _showDiagnostics(agentId) {
+        const overlay = document.getElementById('diagnostics-modal');
+        const titleEl = document.getElementById('diagnostics-modal-title');
+        const bodyEl = document.getElementById('diagnostics-modal-body');
+
+        const agent = this._agents.find(a => a.id === agentId);
+        const displayName = agent ? agent.name : agentId;
+
+        if (titleEl) titleEl.textContent = `Diagnostics: ${displayName}`;
+        if (bodyEl) bodyEl.innerHTML = '<div class="diagnostics-loading">Loading...</div>';
+        if (overlay) overlay.classList.add('active');
+
+        try {
+            const data = await safeFetch(`/api/agents/${agentId}/diagnostics`, {});
+            if (bodyEl) {
+                bodyEl.innerHTML = this._renderDiagnostics(data, agentId);
+
+                // Bind "Ask for Status" button inside the modal
+                const askBtn = bodyEl.querySelector('.diagnostics-ask-btn');
+                if (askBtn) {
+                    askBtn.addEventListener('click', async () => {
+                        askBtn.disabled = true;
+                        askBtn.textContent = 'Requesting...';
+                        try {
+                            await fetch(`/api/agents/${agentId}/status-request`, { method: 'POST' });
+                            askBtn.textContent = 'Requested!';
+                        } catch (err) {
+                            askBtn.textContent = 'Failed';
+                        }
+                        setTimeout(() => {
+                            askBtn.disabled = false;
+                            askBtn.textContent = 'Ask for Status Report';
+                        }, 3000);
+                    });
+                }
+            }
+        } catch (err) {
+            console.error('Diagnostics load failed:', err);
+            if (bodyEl) bodyEl.innerHTML = '<div class="diagnostics-loading">Failed to load diagnostics.</div>';
+        }
+    },
+
+    _renderDiagnostics(data, agentId) {
+        const esc = (t) => {
+            const d = document.createElement('div');
+            d.textContent = t || '';
+            return d.innerHTML;
+        };
+        const linkify = (t) => typeof linkifyTaskIds === 'function' ? linkifyTaskIds(esc(t)) : esc(t);
+        const timeAgo = (iso) => {
+            if (!iso) return '-';
+            const d = new Date(iso);
+            const s = Math.floor((Date.now() - d.getTime()) / 1000);
+            if (s < 0) return 'just now';
+            if (s < 60) return `${s}s ago`;
+            if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+            if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+            return `${Math.floor(s / 86400)}d ago`;
+        };
+        const priorityLabel = (p) => {
+            const map = { 1: 'Critical', 2: 'High', 3: 'Medium', 4: 'Low', 5: 'Backlog' };
+            return map[p] || `P${p}`;
+        };
+        const renderMd = (text) => {
+            if (!text) return '';
+            let html;
+            if (typeof marked !== 'undefined') {
+                try { html = marked.parse(text); } catch (e) { html = esc(text); }
+            } else {
+                html = esc(text);
+            }
+            return typeof linkifyTaskIds === 'function' ? linkifyTaskIds(html) : html;
+        };
+
+        // Status header
+        let html = `
+            <div class="diag-section">
+                <div class="diag-status-row">
+                    <span class="diag-label">Status:</span>
+                    <span class="agent-card__status status--${data.status}">${data.status}</span>
+                    ${data.activity ? `<span class="diag-activity">(${esc(data.activity)})</span>` : ''}
+                </div>
+                <div class="diag-status-row">
+                    <span class="diag-label">Role:</span>
+                    <span>${esc(data.role) || '-'}</span>
+                </div>
+                <div class="diag-status-row">
+                    <span class="diag-label">Current Task:</span>
+                    <span>${data.current_task_id ? linkify(data.current_task_id) : 'none'}</span>
+                </div>
+                <div class="diag-status-row">
+                    <span class="diag-label">Messages Processed:</span>
+                    <span>${data.messages_processed || 0}</span>
+                </div>
+                <div class="diag-status-row">
+                    <span class="diag-label">Model:</span>
+                    <span>${esc(data.model) || '-'}</span>
+                </div>
+            </div>
+        `;
+
+        // Current Task Details
+        if (data.current_task) {
+            const ct = data.current_task;
+            html += `<div class="diag-section">
+                <h3 class="diag-section-title">Current Task Details</h3>
+                <div class="diag-task-detail">
+                    <div class="diag-task-detail__header">
+                        <span class="diag-task-detail__title">${esc(ct.title)}</span>
+                        <span class="diag-task-detail__meta">
+                            <span class="diag-tag diag-tag--status diag-tag--${ct.status}">${ct.status}</span>
+                            <span class="diag-tag diag-tag--priority diag-tag--p${ct.priority}">${priorityLabel(ct.priority)}</span>
+                            ${ct.estimate ? `<span class="diag-tag">${ct.estimate} pts</span>` : ''}
+                            ${ct.category !== 'operational' ? `<span class="diag-tag">${esc(ct.category)}</span>` : ''}
+                        </span>
+                    </div>`;
+            if (ct.description) {
+                html += `<div class="diag-task-detail__desc">${esc(ct.description.substring(0, 200))}${ct.description.length > 200 ? '…' : ''}</div>`;
+            }
+            // Progress notes (scope analysis, plan, etc.)
+            if (ct.progress_notes && ct.progress_notes.length > 0) {
+                html += `<div class="diag-progress-notes">
+                    <div class="diag-progress-notes__label">Progress Notes</div>`;
+                for (const note of ct.progress_notes) {
+                    html += `<div class="diag-progress-note">
+                        <div class="diag-progress-note__header">
+                            <span class="diag-progress-note__agent">${esc(note.agent || '')}</span>
+                            <span class="diag-progress-note__time">${timeAgo(note.timestamp)}</span>
+                        </div>
+                        <div class="diag-progress-note__body">${renderMd(note.note || '')}</div>
+                    </div>`;
+                }
+                html += `</div>`;
+            }
+            html += `</div></div>`;
+        }
+
+        // Working Box
+        html += `<div class="diag-section">
+            <h3 class="diag-section-title">Working Box</h3>`;
+        if (data.workingbox_task) {
+            const wb = data.workingbox_task;
+            html += `<div class="diag-task-item">
+                <span class="diag-task-type">${esc(wb.type || 'task')}</span>
+                <span class="diag-task-title">${esc(wb.task_title || wb.task_id || 'untitled')}</span>
+                <span class="diag-task-sender">from ${esc(wb.sender)}</span>
+                <span class="diag-task-time">${timeAgo(wb.created_at)}</span>
+            </div>`;
+        } else {
+            html += `<div class="diag-empty">Empty</div>`;
+        }
+        html += `</div>`;
+
+        // Inbox Tasks
+        const inboxCount = data.inbox_tasks ? data.inbox_tasks.length : 0;
+        html += `<div class="diag-section">
+            <h3 class="diag-section-title">Inbox Tasks (${inboxCount})</h3>`;
+        if (inboxCount > 0) {
+            for (const t of data.inbox_tasks) {
+                html += `<div class="diag-task-item">
+                    <span class="diag-task-title">${esc(t.task_title || t.task_id || 'untitled')}</span>
+                    <span class="diag-task-sender">from ${esc(t.sender)}</span>
+                    <span class="diag-task-time">${timeAgo(t.created_at)}</span>
+                </div>`;
+            }
+        } else {
+            html += `<div class="diag-empty">No tasks in inbox</div>`;
+        }
+        html += `</div>`;
+
+        // Assigned Tasks (other tasks this agent owns, beyond current)
+        if (data.assigned_tasks && data.assigned_tasks.length > 0) {
+            html += `<div class="diag-section">
+                <h3 class="diag-section-title">Assigned Tasks (${data.assigned_tasks.length})</h3>`;
+            for (const t of data.assigned_tasks) {
+                html += `<div class="diag-task-item">
+                    <span class="diag-tag diag-tag--status diag-tag--${t.status}">${t.status}</span>
+                    <span class="diag-task-title">${linkify(t.id)}</span>
+                    <span class="diag-task-title">${esc(t.title)}</span>
+                </div>`;
+            }
+            html += `</div>`;
+        }
+
+        // Session Stats
+        html += `<div class="diag-section">
+            <h3 class="diag-section-title">Session Stats</h3>`;
+        if (data.session_stats) {
+            const ss = data.session_stats;
+            html += `<div class="diag-stats-grid">
+                <div class="diag-stat"><span class="diag-stat-label">Requests</span><span class="diag-stat-value">${ss.request_count || 0}</span></div>
+                <div class="diag-stat"><span class="diag-stat-label">Errors</span><span class="diag-stat-value ${ss.error_count > 0 ? 'diag-stat--error' : ''}">${ss.error_count || 0}</span></div>
+                <div class="diag-stat"><span class="diag-stat-label">Avg Time</span><span class="diag-stat-value">${ss.avg_duration_ms ? (ss.avg_duration_ms / 1000).toFixed(1) + 's' : '-'}</span></div>
+                <div class="diag-stat"><span class="diag-stat-label">Total Cost</span><span class="diag-stat-value">$${(ss.total_cost_usd || 0).toFixed(4)}</span></div>
+                <div class="diag-stat"><span class="diag-stat-label">Tokens In</span><span class="diag-stat-value">${(ss.total_input_tokens || 0).toLocaleString()}</span></div>
+                <div class="diag-stat"><span class="diag-stat-label">Tokens Out</span><span class="diag-stat-value">${(ss.total_output_tokens || 0).toLocaleString()}</span></div>
+            </div>`;
+            if (ss.last_error) {
+                html += `<div class="diag-last-error"><strong>Last error:</strong> ${esc(ss.last_error)}</div>`;
+            }
+        } else {
+            html += `<div class="diag-empty">No session data</div>`;
+        }
+        html += `</div>`;
+
+        // Recent Activity
+        const actCount = data.recent_activity ? data.recent_activity.length : 0;
+        html += `<div class="diag-section">
+            <h3 class="diag-section-title">Recent Activity (${actCount})</h3>`;
+        if (actCount > 0) {
+            html += `<div class="diag-activity-list">`;
+            for (const a of data.recent_activity.slice().reverse()) {
+                const direction = a.sender === agentId ? 'out' : 'in';
+                const arrow = direction === 'out' ? '&rarr;' : '&larr;';
+                const other = direction === 'out' ? a.recipient : a.sender;
+                html += `<div class="diag-activity-item diag-activity--${direction}">
+                    <span class="diag-activity-time">${timeAgo(a.timestamp)}</span>
+                    <span class="diag-activity-dir">${arrow} ${esc(other)}</span>
+                    <span class="diag-activity-type">${esc(a.type)}</span>
+                    <span class="diag-activity-preview">${linkify((a.content_preview || '').substring(0, 80))}</span>
+                </div>`;
+            }
+            html += `</div>`;
+        } else {
+            html += `<div class="diag-empty">No recent activity</div>`;
+        }
+        html += `</div>`;
+
+        // Ask for Status button
+        html += `<div class="diag-actions">
+            <button class="btn btn--primary diagnostics-ask-btn">Ask for Status Report</button>
+        </div>`;
+
+        return html;
+    },
+
+    _hideDiagnosticsModal() {
+        const modal = document.getElementById('diagnostics-modal');
         if (modal) modal.classList.remove('active');
     },
 

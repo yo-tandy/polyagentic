@@ -80,6 +80,38 @@ class ProjectRepository(BaseRepository):
             await session.refresh(project)
             return project
 
+    async def set_running(
+        self, project_id: str, is_running: bool,
+    ) -> None:
+        async with self._session() as session:
+            await session.execute(
+                update(Project)
+                .where(Project.id == project_id)
+                .values(is_running=is_running)
+            )
+            await session.commit()
+
+    async def get_running(
+        self, tenant_id: str = "default",
+    ) -> list[Project]:
+        async with self._session() as session:
+            stmt = select(Project).where(
+                Project.tenant_id == tenant_id,
+                Project.is_running == True,  # noqa: E712
+            )
+            result = await session.execute(stmt)
+            return list(result.scalars().all())
+
+    async def clear_running(self, tenant_id: str = "default") -> None:
+        """Mark all projects as not running (used at startup)."""
+        async with self._session() as session:
+            await session.execute(
+                update(Project)
+                .where(Project.tenant_id == tenant_id)
+                .values(is_running=False)
+            )
+            await session.commit()
+
     async def delete(self, project_id: str) -> bool:
         async with self._session() as session:
             stmt = delete(Project).where(Project.id == project_id)

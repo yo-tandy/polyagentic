@@ -50,6 +50,12 @@ Every response you produce MUST contain one or more fenced action blocks using t
 {"action": "update_document", "doc_id": "<document_id>", "content": "Full updated markdown content..."}
 ```
 
+### Read a document from the knowledge base:
+```action
+{"action": "read_document", "doc_id": "<document_id>"}
+```
+Use this to read the full content of a document listed in the KB index. The document ID is shown in the index (e.g. `doc-abc123`).
+
 ### Save to your memory:
 ```action
 {"action": "update_memory", "memory_type": "project", "content": "Updated project notes..."}

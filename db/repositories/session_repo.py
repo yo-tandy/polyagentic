@@ -72,6 +72,10 @@ class SessionRepository(BaseRepository):
                 record.paused_at = now
             elif state == "killed":
                 record.killed_at = now
+            elif state == "active":
+                # Reset consecutive error counter on resume so that a single
+                # subsequent error doesn't immediately re-trigger auto-pause.
+                record.consecutive_errors = 0
             await sess.commit()
 
     async def record_request(
@@ -123,6 +127,19 @@ class SessionRepository(BaseRepository):
         async with self._session() as sess:
             record = await self._get_or_create_in(sess, project_id, agent_id)
             record.model = model
+            await sess.commit()
+
+    async def set_provider(
+        self,
+        project_id: str,
+        agent_id: str,
+        provider: str | None,
+        fallback_provider: str | None = None,
+    ) -> None:
+        async with self._session() as sess:
+            record = await self._get_or_create_in(sess, project_id, agent_id)
+            record.provider = provider
+            record.fallback_provider = fallback_provider
             await sess.commit()
 
     async def set_prompt_hash(

@@ -24,7 +24,7 @@ const ActivityLog = {
             <div class="activity-entry">
                 <span class="activity-entry__time">${time}</span>
                 <span class="activity-entry__route">${route}</span>
-                <span class="activity-entry__content">${this._escapeHtml(e.content_preview || '')}</span>
+                <span class="activity-entry__content">${this._linkify(e.content_preview || '')}</span>
             </div>
         `;
     },
@@ -36,6 +36,14 @@ const ActivityLog = {
         } catch {
             return '';
         }
+    },
+
+    _linkify(text) {
+        let html = this._escapeHtml(text);
+        if (typeof linkifyTaskIds === 'function') {
+            html = linkifyTaskIds(html);
+        }
+        return html;
     },
 
     _escapeHtml(text) {

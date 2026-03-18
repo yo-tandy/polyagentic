@@ -160,6 +160,14 @@ class ProjectStore:
     def get_team_structure_path(self, project_id: str) -> Path:
         return self.get_project_dir(project_id) / "team_structure.yaml"
 
+    async def set_running(self, project_id: str, is_running: bool) -> None:
+        await self._repo.set_running(project_id, is_running)
+        # Update cache
+        for p in self._cache:
+            if p["id"] == project_id:
+                p["is_running"] = is_running
+                break
+
     # ── Helpers ──
 
     @staticmethod
@@ -173,6 +181,7 @@ class ProjectStore:
             "status": rec.status or "active",
             "main_branch": rec.main_branch or "main",
             "github_url": rec.github_url,
+            "is_running": getattr(rec, "is_running", False) or False,
         }
 
 

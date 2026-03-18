@@ -44,6 +44,7 @@ class Task:
     progress_notes: list[dict] = field(default_factory=list)
     completion_summary: str | None = None
     review_output: str | None = None
+    scope_approved: bool = False      # set after scope analysis approves the task
     started_at: str | None = None    # set when task moves to in_progress
     completed_at: str | None = None  # set when task moves to done
 
@@ -68,6 +69,7 @@ class Task:
         data.setdefault("progress_notes", [])
         data.setdefault("completion_summary", None)
         data.setdefault("review_output", None)
+        data.setdefault("scope_approved", False)
         data.setdefault("started_at", None)
         data.setdefault("completed_at", None)
         return cls(**data)

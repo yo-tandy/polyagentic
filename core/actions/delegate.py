@@ -38,8 +38,8 @@ class Delegate(BaseAction):
         ActionField("estimate", "integer",
                      description="Story point estimate (Fibonacci: 1, 2, 3, 5, 8, 13)"),
         ActionField("initial_status", "string",
-                     description="Initial status: draft (default, for estimation) or pending (immediate)",
-                     default="draft",
+                     description="Initial status: pending (default for operational) or draft (default for project, awaits estimation)",
+                     default=None,
                      enum=["draft", "pending"]),
     ]
 
@@ -64,7 +64,8 @@ class Delegate(BaseAction):
         category = action.get("category", "operational")
         phase_id = action.get("phase_id")
         estimate = action.get("estimate")
-        initial_status_str = action.get("initial_status", "draft")
+        default_status = "pending" if category == "operational" else "draft"
+        initial_status_str = action.get("initial_status", default_status)
         initial_status = TaskStatus(initial_status_str)
 
         # Smart routing: agents with _registry check if target exists
@@ -76,14 +77,31 @@ class Delegate(BaseAction):
 
         task_id = None
         if agent._task_board:
-            # Draft tasks don't get an assignee — assignment happens during estimation
             is_draft = initial_status == TaskStatus.DRAFT
+
+            if category == "project":
+                # Project tasks: role-based by default — any agent with
+                # the matching role can pick it up.  The agent claims
+                # assignee when it transitions to IN_PROGRESS.
+                task_assignee = None
+                if role:
+                    task_role = role
+                elif is_known_agent and registry:
+                    target_agent = registry.get(to)
+                    task_role = target_agent.role if target_agent else to
+                else:
+                    task_role = to
+            else:
+                # Operational: always direct assignment
+                task_assignee = to if is_known_agent and not is_draft else None
+                task_role = role or (to if (registry and not is_known_agent) else None)
+
             task = await agent._task_board.create_task(
                 title=title,
                 description=desc,
                 created_by=agent.agent_id,
-                assignee=(to if is_known_agent and not is_draft else None),
-                role=role or (to if (registry and not is_known_agent) else None),
+                assignee=task_assignee,
+                role=task_role,
                 priority=priority,
                 labels=labels,
                 category=category,

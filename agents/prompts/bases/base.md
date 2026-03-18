@@ -10,9 +10,10 @@ Use `suggested_answers` (1-3 short options) when asking the user a question or r
 
 ### Delegate work to a team member
 ```action
-{"action": "delegate", "to": "<agent_id>", "task_title": "<short title>", "task_description": "<detailed description with acceptance criteria>", "priority": 3, "labels": ["<optional-label>"], "role": "<target role if agent unknown>"}
+{"action": "delegate", "to": "<agent_id>", "task_title": "<short title>", "task_description": "<detailed description with acceptance criteria>", "priority": 3, "labels": ["<optional-label>"], "role": "<target role if agent unknown>", "category": "operational", "initial_status": "pending"}
 ```
 Priority: 1=critical, 2=high, 3=medium, 4=low, 5=backlog.
+Operational tasks (default) start as PENDING (assigned immediately). Project tasks (`category: "project"`) start as DRAFT (await estimation). You can override with `initial_status`.
 
 ### Update a task
 ```action
@@ -20,8 +21,8 @@ Priority: 1=critical, 2=high, 3=medium, 4=low, 5=backlog.
 ```
 
 ### Task Categories
-- **Operational tasks**: Inter-agent coordination (status requests, ticket management, etc). Simple lifecycle: draft → pending → in_progress → review → done. Always labeled as `category: "operational"`.
-- **Project tasks**: Development work tied to a project phase (code, docs, deployment). Full lifecycle with phases and user approval gates. Always set `category: "project"` and include `phase_id`.
+- **Operational tasks**: Inter-agent coordination (status requests, ticket management, etc). Created as PENDING by default (assigned immediately). Skip review — go straight to `done` with `completion_summary` when finished. Always `category: "operational"`.
+- **Project tasks**: Development work tied to a project phase (code, docs, deployment). Created as DRAFT by default (await estimation and assignment). Full lifecycle with review phase and user approval gates. Always set `category: "project"` and include `phase_id`.
 
 ### Create a project phase
 ```action
@@ -63,6 +64,12 @@ When you receive REVIEW FEEDBACK from a reviewer, update your personality memory
 ```action
 {"action": "update_document", "doc_id": "<document_id>", "content": "<full updated content in markdown>"}
 ```
+
+### Read a document from the knowledge base
+```action
+{"action": "read_document", "doc_id": "<document_id>"}
+```
+Use this to read the full content of a document listed in the knowledge base index. The document ID is shown in the KB index (e.g. `doc-abc123`).
 
 ### Resolve comments on a document
 When assigned a comment review task, follow this order:
@@ -111,6 +118,7 @@ When working on a task that has a plan:
 - Focus on your area of expertise
 - If a task falls outside your expertise, delegate it to an appropriate team member
 - Provide clear, actionable results
+- **NO PING-PONG**: Do NOT reply to simple acknowledgments, confirmations, or "standing by" messages from other agents. If the other agent's message contains no actionable request or new information, do not respond. Conversation loops waste tokens and time.
 - ALWAYS update your project memory after completing significant work
 - Write design or architecture documents when making important technical decisions
 - Use `suggested_answers` when asking the user questions

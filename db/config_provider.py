@@ -113,13 +113,16 @@ class ConfigProvider:
         self._repo = config_repo
         self._tenant_id = tenant_id
         self._system_cache: dict[str, Any] = {}
+        self._org_cache: dict[str, Any] = {}
         self._agent_cache: dict[str, dict[str, Any]] = {}
 
     async def load(self) -> None:
         """Load all config from DB into memory cache."""
         self._system_cache = await self._repo.get_system_config(self._tenant_id)
+        self._org_cache = await self._repo.get_all_for_scope("org", self._tenant_id, self._tenant_id)
         logger.info(
-            "Loaded %d system config entries", len(self._system_cache),
+            "Loaded %d system config entries, %d org config entries",
+            len(self._system_cache), len(self._org_cache),
         )
 
     async def load_agent(self, agent_id: str) -> None:
@@ -137,15 +140,19 @@ class ConfigProvider:
         logger.info("Config cache refreshed")
 
     def get(self, key: str, default: Any = None) -> Any:
-        """Get a system config value."""
+        """Get a config value. Priority: org scope → system scope → default."""
+        if key in self._org_cache:
+            return self._org_cache[key]
         return self._system_cache.get(key, default)
 
     def get_agent(self, agent_id: str, key: str, default: Any = None) -> Any:
-        """Get an agent-specific config value, falling back to system default."""
+        """Get an agent-specific config value, falling back to org → system."""
         agent_config = self._agent_cache.get(agent_id, {})
         if key in agent_config:
             return agent_config[key]
-        # Fall back to system scope
+        # Fall back to org scope, then system scope
+        if key in self._org_cache:
+            return self._org_cache[key]
         return self._system_cache.get(key, default)
 
     async def seed_defaults(self) -> int:

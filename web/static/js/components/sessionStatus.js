@@ -3,6 +3,7 @@
 const SessionStatus = {
     modal: null,
     listEl: null,
+    _bulkActionInProgress: false,
 
     PROVIDER_MODELS: {
         'claude-cli': ['sonnet', 'opus', 'haiku'],
@@ -196,8 +197,8 @@ const SessionStatus = {
 
     async _handleBulkAction(action, btn) {
         btn.disabled = true;
-        const origText = btn.textContent;
         btn.textContent = '...';
+        this._bulkActionInProgress = true;
         try {
             const res = await fetch(`/api/sessions/${action}`, { method: 'POST' });
             if (res.ok) {
@@ -209,8 +210,7 @@ const SessionStatus = {
         } catch (err) {
             console.error('Bulk action error:', err);
         }
-        btn.disabled = false;
-        btn.textContent = origText;
+        this._bulkActionInProgress = false;
     },
 
     async _handleAction(agentId, action, btn) {
@@ -290,8 +290,8 @@ const SessionStatus = {
     },
 
     handleSessionUpdate(data) {
-        // Refresh modal if it's currently open
-        if (this.modal?.classList.contains('active')) {
+        // Refresh modal if it's currently open (skip during bulk actions to avoid races)
+        if (this.modal?.classList.contains('active') && !this._bulkActionInProgress) {
             this.loadSessions();
         }
     },

@@ -39,6 +39,8 @@ class UpdateTask(BaseAction):
                      enum=["approved", "rejected", "complete"]),
         ActionField("estimate", "integer",
                      description="Story point estimate (Fibonacci: 1, 2, 3, 5, 8, 13)"),
+        ActionField("scope_approved", "boolean",
+                     description="Whether scope analysis has approved this task"),
     ]
 
     async def execute(
@@ -54,7 +56,8 @@ class UpdateTask(BaseAction):
         for key in (
             "status", "assignee", "role", "priority", "reviewer",
             "progress_note", "completion_summary", "review_output",
-            "paused_summary", "labels", "outcome", "category", "phase_id", "estimate",
+            "paused_summary", "labels", "outcome", "category", "phase_id",
+            "estimate", "scope_approved",
         ):
             if key in action:
                 updates[key] = action[key]

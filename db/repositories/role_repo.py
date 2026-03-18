@@ -43,6 +43,7 @@ UNIVERSAL_ACTIONS = [
     "update_memory",
     "write_document",
     "update_document",
+    "read_document",
     "resolve_comments",
     "start_conversation",
     "end_conversation",

@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from enum import Enum
 
 from db.repositories.session_repo import SessionRepository
+from db.repositories.request_history_repo import RequestHistoryRepository
 
 logger = logging.getLogger(__name__)
 
@@ -30,9 +31,15 @@ class SessionStore:
     Read-only ``is_paused`` / ``is_killed`` / ``get`` use the cache.
     """
 
-    def __init__(self, repo: SessionRepository, project_id: str):
+    def __init__(
+        self,
+        repo: SessionRepository,
+        project_id: str,
+        history_repo: RequestHistoryRepository | None = None,
+    ):
         self._repo = repo
         self._project_id = project_id
+        self._history_repo = history_repo
         # In-memory cache: agent_id -> dict with session fields
         self._cache: dict[str, dict] = {}
 
@@ -61,6 +68,8 @@ class SessionStore:
             "paused_at": rec.paused_at.isoformat() if rec.paused_at else None,
             "killed_at": rec.killed_at.isoformat() if rec.killed_at else None,
             "model": rec.model,
+            "provider": getattr(rec, "provider", None),
+            "fallback_provider": getattr(rec, "fallback_provider", None),
             "prompt_hash": rec.prompt_hash,
             "last_error": rec.last_error,
         }
@@ -97,6 +106,14 @@ class SessionStore:
         rec = self._cache.get(agent_id)
         return rec.get("model") if rec else None
 
+    def get_provider(self, agent_id: str) -> str | None:
+        rec = self._cache.get(agent_id)
+        return rec.get("provider") if rec else None
+
+    def get_fallback_provider(self, agent_id: str) -> str | None:
+        rec = self._cache.get(agent_id)
+        return rec.get("fallback_provider") if rec else None
+
     def get_prompt_hash(self, agent_id: str) -> str | None:
         rec = self._cache.get(agent_id)
         return rec.get("prompt_hash") if rec else None
@@ -126,12 +143,27 @@ class SessionStore:
             self._cache[agent_id]["paused_at"] = now
         elif state == SessionState.KILLED:
             self._cache[agent_id]["killed_at"] = now
+        elif state == SessionState.ACTIVE:
+            # Reset consecutive error counter on resume so a single
+            # subsequent error doesn't immediately re-trigger auto-pause.
+            self._cache[agent_id]["consecutive_errors"] = 0
 
     async def set_model(self, agent_id: str, model: str):
         await self._repo.set_model(self._project_id, agent_id, model)
         if agent_id not in self._cache:
             self._cache[agent_id] = {"session_id": "", "state": "active"}
         self._cache[agent_id]["model"] = model
+
+    async def set_provider(
+        self, agent_id: str, provider: str | None, fallback_provider: str | None = None,
+    ):
+        await self._repo.set_provider(
+            self._project_id, agent_id, provider, fallback_provider,
+        )
+        if agent_id not in self._cache:
+            self._cache[agent_id] = {"session_id": "", "state": "active"}
+        self._cache[agent_id]["provider"] = provider
+        self._cache[agent_id]["fallback_provider"] = fallback_provider
 
     async def set_prompt_hash(self, agent_id: str, prompt_hash: str):
         await self._repo.set_prompt_hash(self._project_id, agent_id, prompt_hash)
@@ -160,6 +192,20 @@ class SessionStore:
             output_tokens=output_tokens,
             consecutive_error_threshold=CONSECUTIVE_ERROR_THRESHOLD,
         )
+        # Also record in request_history for time-windowed stats
+        if self._history_repo:
+            try:
+                await self._history_repo.record(
+                    project_id=self._project_id,
+                    agent_id=agent_id,
+                    duration_ms=duration_ms,
+                    cost_usd=cost_usd,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    is_error=is_error,
+                )
+            except Exception:
+                logger.debug("Failed to record request history", exc_info=True)
         # Refresh this agent's cache from DB
         rec = await self._repo.get(self._project_id, agent_id)
         if rec:
@@ -178,11 +224,16 @@ class SessionStore:
 
     async def clear_session(self, agent_id: str):
         """Full reset — clear session AND all accumulated stats."""
-        old_model = self._cache.get(agent_id, {}).get("model")
+        old_cache = self._cache.get(agent_id, {})
+        old_model = old_cache.get("model")
+        old_provider = old_cache.get("provider")
+        old_fallback = old_cache.get("fallback_provider")
         await self._repo.clear_session(self._project_id, agent_id)
-        # Preserve model override
+        # Preserve model and provider overrides
         if old_model:
             await self._repo.set_model(self._project_id, agent_id, old_model)
+        if old_provider:
+            await self._repo.set_provider(self._project_id, agent_id, old_provider, old_fallback)
         # Refresh cache
         rec = await self._repo.get(self._project_id, agent_id)
         if rec:

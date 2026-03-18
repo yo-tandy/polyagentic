@@ -45,6 +45,9 @@ class ActionHandler:
         "send_message": "respond_to_user",
         "assign": "delegate",
         "assign_task": "delegate",
+        "assign_ticket": "delegate",
+        "create_ticket": "delegate",
+        "create_task": "delegate",
         "resolve_comment": "resolve_comments",
         "conversation_summary": "end_conversation",
         "close_conversation": "end_conversation",
@@ -125,6 +128,7 @@ class ActionHandler:
 
         # Mutable state kept in sync by Agent
         self.current_task_id: str | None = None
+        self.last_actions_count: int = 0  # actions dispatched in last _parse_response call
 
     # ------------------------------------------------------------------
     # Provider access (Agent swaps provider at runtime)
@@ -145,6 +149,7 @@ class ActionHandler:
         documents, memory, git, etc.) is handled through the registry.
         """
         actions = self._extract_actions(result_text)
+        self.last_actions_count = len(actions)
 
         if not actions:
             # No action blocks found -- sanitize and forward raw text
@@ -201,20 +206,69 @@ class ActionHandler:
     def _extract_actions(self, text: str) -> list[dict]:
         """Extract action blocks from Claude output.
 
-        Primary: looks for ```action ... ``` fenced blocks.
+        Primary: looks for ```action ... ``` or ```<action_name> ... ``` fenced blocks.
         Fallback: recovers bare JSON objects containing "action" or "tool" keys.
         All parsed actions are normalized via _normalize_action().
         """
         actions = []
 
-        # Primary: fenced action blocks
-        pattern = r"```action\s*(.*?)\s*```"
-        for match in re.findall(pattern, text, re.DOTALL):
-            try:
-                parsed = json.loads(match.strip())
-                actions.append(self._normalize_action(parsed))
-            except json.JSONDecodeError:
-                logger.warning("Failed to parse action block: %s", match[:100])
+        # Known action names (for flexible fence tag matching)
+        known_actions = self._get_known_actions() if self._get_known_actions else set()
+
+        # Primary: fenced action blocks — accept ```action or ```<known_action_name>
+        pattern = r"```(\w+)\s*(.*?)\s*```"
+        for match in re.finditer(pattern, text, re.DOTALL):
+            tag = match.group(1)
+            body = match.group(2).strip()
+
+            if tag == "action":
+                # Standard: body is the full action JSON dict
+                try:
+                    parsed = json.loads(body)
+                    actions.append(self._normalize_action(parsed))
+                except json.JSONDecodeError:
+                    # Try extracting a JSON object from within the body
+                    # (handles cases where extra text like "json\n" precedes the JSON)
+                    extracted = self._extract_json_object(body)
+                    if extracted is not None:
+                        actions.append(self._normalize_action(extracted))
+                        logger.info("Extracted JSON object from action block (%d chars)", len(body))
+                    else:
+                        repaired = self._try_repair_json(body)
+                        if repaired is not None:
+                            actions.append(self._normalize_action(repaired))
+                            logger.info("Repaired malformed action block (%d chars)", len(body))
+                        else:
+                            logger.warning("Failed to parse action block: %s", body[:200])
+
+            elif tag in known_actions:
+                # Agent used the action name as fence tag (e.g. ```create_batch_tickets)
+                try:
+                    parsed = json.loads(body)
+                except json.JSONDecodeError:
+                    logger.warning(
+                        "Failed to parse ```%s block: %s", tag, body[:100],
+                    )
+                    continue
+
+                if isinstance(parsed, dict):
+                    if "action" not in parsed:
+                        parsed["action"] = tag
+                    actions.append(self._normalize_action(parsed))
+                elif isinstance(parsed, list):
+                    # Agent put the payload array directly — wrap into action dict
+                    array_field = self._infer_array_field(tag)
+                    wrapped = {"action": tag, array_field: parsed}
+                    actions.append(self._normalize_action(wrapped))
+                    logger.info(
+                        "Wrapped ```%s array payload into action dict (field='%s', %d items)",
+                        tag, array_field, len(parsed),
+                    )
+                else:
+                    logger.warning(
+                        "Unexpected JSON type in ```%s block: %s",
+                        tag, type(parsed).__name__,
+                    )
 
         if actions:
             return actions
@@ -236,6 +290,119 @@ class ActionHandler:
             )
 
         return actions
+
+    def _infer_array_field(self, action_name: str) -> str:
+        """Given an action name, find its primary array field.
+
+        Falls back to 'items' if no array field is found.
+        """
+        if self._action_registry:
+            action = self._action_registry.get(action_name)
+            if action:
+                for field in action.fields:
+                    if field.type == "array":
+                        return field.name
+        return "items"
+
+    @staticmethod
+    def _extract_json_object(text: str) -> dict | None:
+        """Try to extract a JSON object from text that may have extra content.
+
+        Handles common LLM patterns like:
+        - ``json\\n{...}`` (nested code fence tag leaks)
+        - ``Here is the action:\\n{...}`` (preamble text)
+        - Multiple JSON objects (returns the first valid one with an "action" key)
+        """
+        # Find all potential JSON object starts
+        idx = 0
+        while idx < len(text):
+            start = text.find("{", idx)
+            if start == -1:
+                break
+            # Try progressively longer substrings from this brace
+            depth = 0
+            for i in range(start, len(text)):
+                if text[i] == "{":
+                    depth += 1
+                elif text[i] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        candidate = text[start:i + 1]
+                        try:
+                            parsed = json.loads(candidate)
+                            if isinstance(parsed, dict) and ("action" in parsed or "tool" in parsed):
+                                return parsed
+                        except json.JSONDecodeError:
+                            pass
+                        break
+            idx = start + 1
+        return None
+
+    @staticmethod
+    def _try_repair_json(raw: str) -> dict | None:
+        """Attempt to repair malformed JSON from LLM output.
+
+        The most common failure is unescaped double-quotes inside long string
+        values (e.g. the "content" field of write_document).  Strategy:
+        find each string-valued key, extract its value as raw text between
+        the opening quote and the correct closing quote, then re-escape it.
+        """
+        # Strategy 1: find "content": "..." which is the usual culprit.
+        # The value starts after `"content": "` and ends at the last `"}`
+        # (or `", "` before the next key).
+        for field in ("content", "task_description", "description",
+                      "completion_summary", "progress_note", "paused_summary"):
+            # Match: "field": "  ... (greedy to end)
+            field_pattern = rf'"{field}"\s*:\s*"'
+            m = re.search(field_pattern, raw)
+            if not m:
+                continue
+
+            prefix = raw[:m.start()]
+            value_start = m.end()  # first char after opening quote
+
+            # Find the closing pattern: either `"}` (last field) or `", "` (next field)
+            # Walk backwards from the end to find the real closing quote.
+            # The last `"` before a `}` or `, "next_key":` is our closer.
+            # Simple approach: try removing the field value, re-escaping, and re-inserting.
+            suffix_patterns = [
+                ('"}\n', 2),   # end of object with newline
+                ('"}', 2),     # end of object
+            ]
+
+            # Find the last `"}` or `", "` in the raw string after value_start
+            best_end = -1
+            suffix_text = ""
+            # Check for trailing `"}`
+            rstrip = raw.rstrip()
+            if rstrip.endswith('"}'):
+                best_end = len(raw) - len(raw) - len(rstrip) + rstrip.rfind('"}', value_start)
+                # Simpler: rfind from the end
+                best_end = raw.rfind('"}', value_start)
+                suffix_text = raw[best_end + 1:]  # the `}` and anything after
+                raw_value = raw[value_start:best_end]
+            elif rstrip.endswith('"}'):
+                continue
+            else:
+                continue
+
+            if best_end <= value_start:
+                continue
+
+            # Re-escape the value: replace unescaped quotes
+            # First undo any already-escaped quotes to avoid double-escaping
+            clean = raw_value.replace('\\"', '"')
+            # Now escape all quotes
+            clean = clean.replace('"', '\\"')
+            # Rebuild
+            rebuilt = prefix + f'"{field}": "' + clean + '"' + suffix_text
+
+            try:
+                return json.loads(rebuilt)
+            except json.JSONDecodeError:
+                continue
+
+        return None
 
     def _normalize_action(self, raw: dict) -> dict:
         """Normalize common wrong key/value patterns in a parsed action."""
@@ -395,6 +562,8 @@ class ActionHandler:
 
             if action_type == "update_memory":
                 await self._handle_memory_update(action)
+                if self._agent_ref:
+                    self._agent_ref._memory_updated = True
 
             elif action_type == "write_document":
                 await self._handle_write_document(action)

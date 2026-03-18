@@ -183,7 +183,12 @@ class PromptBuilder:
 
         # 3b. Active plan for current task
         if self._current_task_plan and msg.task_id:
-            parts.append(f"[Your Plan for This Task]\n{self._current_task_plan}\n---")
+            parts.append(
+                f"[Your Plan for This Task]\n{self._current_task_plan}\n\n"
+                "IMPORTANT: Work on the FIRST incomplete step only. "
+                "Do not attempt to address multiple steps in one response. "
+                "Complete one step, emit the relevant action(s), then stop.\n---"
+            )
 
         # 3c. Connected MCP servers
         mcp_path = self._mcp_config_path_fn()

@@ -1,5 +1,33 @@
 // Polyagentic Dashboard - Main Application
 
+/**
+ * Replace task-xxxxxxxx patterns in rendered HTML with clickable links
+ * that open the task detail modal.
+ */
+function linkifyTaskIds(html) {
+    // Match task-<hex> patterns that aren't already inside an <a> tag.
+    // Split on existing tags to avoid double-wrapping.
+    return html.replace(
+        /(<a\b[^>]*>.*?<\/a>)|(\b(task-[0-9a-f]{8})\b)/gi,
+        (match, existingLink, bare, taskId) => {
+            if (existingLink) return existingLink; // already a link, leave it
+            return `<a href="#" class="task-id-link" data-task-id="${taskId}">${taskId}</a>`;
+        }
+    );
+}
+
+// Global click handler for task ID links (delegated)
+document.addEventListener('click', (e) => {
+    const link = e.target.closest('.task-id-link');
+    if (link) {
+        e.preventDefault();
+        const taskId = link.dataset.taskId;
+        if (taskId && typeof TaskBoard !== 'undefined') {
+            TaskBoard._openTaskDetail(taskId);
+        }
+    }
+});
+
 async function safeFetch(url, fallback = {}) {
     try {
         const res = await fetch(url);
@@ -36,6 +64,7 @@ const App = {
         ConversationBar.init();
         ConversationWindow.init();
         ProjectInfo.init();
+        ProjectsDashboard.init();
 
         await this.loadUserInfo();
         await this.loadInitialState();
@@ -300,7 +329,7 @@ const App = {
                     statusEl.className = 'reauth-status reauth-status--pending';
                 }
                 try {
-                    const res = await fetch('/sessions/reauth', { method: 'POST' });
+                    const res = await fetch('/api/sessions/reauth', { method: 'POST' });
                     const data = await res.json();
                     if (data.status === 'ok') {
                         if (statusEl) {

@@ -38,6 +38,7 @@ from core.team_structure import (
 from agents.role_agent import create_role_agent
 from agents.custom_agent import create_custom_agent
 from core.message import Message, MessageType
+from core.task import TaskStatus
 from web.app import create_app
 
 # DB imports
@@ -61,6 +62,7 @@ from db.repositories.invite_repo import InviteRepository
 from db.repositories.mcp_repo import MCPRepository
 from db.repositories.action_error_repo import ActionErrorRepository
 from db.repositories.agent_template_repo import AgentTemplateRepository
+from db.repositories.request_history_repo import RequestHistoryRepository
 from core.mcp_registry import MCPRegistry
 from core.mcp_manager import MCPManager
 from core.providers.factory import create_provider, FallbackProvider
@@ -89,7 +91,13 @@ def build_team_roster(registry: AgentRegistry) -> str:
 
 
 class ProjectLifecycleManager:
-    """Manages project setup/teardown lifecycle."""
+    """Manages project setup/teardown lifecycle with multi-project support.
+
+    Multiple projects can run simultaneously. The 'viewed' project is the one
+    whose state is exposed through app.state.* for API route handlers.
+    """
+
+    MAX_RUNNING_PROJECTS = 3
 
     def __init__(
         self,
@@ -102,39 +110,94 @@ class ProjectLifecycleManager:
         self.team_config = team_config
         self._config = config_provider
         self._sf = session_factory
-        self.current_state: dict | None = None
-        self._broker_task: asyncio.Task | None = None
+        # Multi-project state
+        self._running_projects: dict[str, dict] = {}  # project_id -> {"state": dict, "broker_task": Task}
+        self._viewed_project_id: str | None = None
+        self._activate_lock = asyncio.Lock()
+
+    @property
+    def viewed_project_id(self) -> str | None:
+        return self._viewed_project_id
+
+    @property
+    def current_state(self) -> dict | None:
+        """Backward compat: return the viewed project's state."""
+        return self.get_viewed_project_state()
+
+    def get_viewed_project_state(self) -> dict | None:
+        if not self._viewed_project_id:
+            return None
+        entry = self._running_projects.get(self._viewed_project_id)
+        return entry["state"] if entry else None
+
+    def get_project_state(self, project_id: str) -> dict | None:
+        entry = self._running_projects.get(project_id)
+        return entry["state"] if entry else None
+
+    def get_running_project_ids(self) -> list[str]:
+        return list(self._running_projects.keys())
+
+    def is_running(self, project_id: str) -> bool:
+        return project_id in self._running_projects
 
     async def activate_project(self, project_id: str) -> dict:
-        """Tear down current project state and set up new one."""
-        if self.current_state:
-            await self._teardown()
+        """Start project if not running, mark as viewed. No teardown of other projects."""
+        async with self._activate_lock:
+            if project_id not in self._running_projects:
+                # Check cap
+                if len(self._running_projects) >= self.MAX_RUNNING_PROJECTS:
+                    raise ValueError(
+                        f"Maximum {self.MAX_RUNNING_PROJECTS} projects can run simultaneously. "
+                        "Stop a project before starting another."
+                    )
+                state = await self._setup(project_id)
+                broker_task = asyncio.create_task(state["broker"].start())
+                self._running_projects[project_id] = {
+                    "state": state,
+                    "broker_task": broker_task,
+                }
+                await self.project_store.set_running(project_id, True)
+                logger.info("Started project '%s' (total running: %d)", project_id, len(self._running_projects))
 
-        await self.project_store.set_active_project(project_id)
-        state = await self._setup(project_id)
-        self.current_state = state
-        return state
+            # Mark as viewed + active
+            await self.project_store.set_active_project(project_id)
+            self._viewed_project_id = project_id
+            return self._running_projects[project_id]["state"]
 
-    async def _teardown(self):
-        """Stop all agents, containers, and broker."""
-        state = self.current_state
-        if not state:
+    async def stop_project(self, project_id: str) -> None:
+        """Stop a specific running project."""
+        entry = self._running_projects.get(project_id)
+        if not entry:
             return
-        logger.info("Tearing down current project...")
+        logger.info("Stopping project '%s'...", project_id)
+        await self._teardown_entry(entry)
+        del self._running_projects[project_id]
+        await self.project_store.set_running(project_id, False)
+        if self._viewed_project_id == project_id:
+            self._viewed_project_id = None
+        logger.info("Project '%s' stopped", project_id)
+
+    async def stop_all(self) -> None:
+        """Stop all running projects (used at server shutdown)."""
+        for project_id in list(self._running_projects.keys()):
+            await self.stop_project(project_id)
+
+    async def _teardown_entry(self, entry: dict) -> None:
+        """Stop all agents, containers, and broker for a project entry."""
+        state = entry["state"]
+        broker_task = entry.get("broker_task")
         for agent in state["registry"].get_all():
             await agent.stop()
         cm = state.get("container_manager")
         if cm:
             await cm.stop_all()
         await state["broker"].stop()
-        if self._broker_task:
-            self._broker_task.cancel()
+        if broker_task:
+            broker_task.cancel()
             try:
-                await self._broker_task
+                await broker_task
             except asyncio.CancelledError:
                 pass
-            self._broker_task = None
-        self.current_state = None
 
     async def _setup(self, project_id: str) -> dict:
         """Initialize all components for the given project."""
@@ -156,6 +219,7 @@ class ProjectLifecycleManager:
 
         # ── Create repositories ──
         session_repo = SessionRepository(self._sf)
+        history_repo = RequestHistoryRepository(self._sf)
         task_repo = TaskRepository(self._sf)
         kb_repo = KnowledgeRepository(self._sf)
         memory_repo = MemoryRepository(self._sf)
@@ -173,7 +237,7 @@ class ProjectLifecycleManager:
         await org_repo.ensure_default()
 
         # ── Create DB-backed stores ──
-        session_store = SessionStore(session_repo, project_id)
+        session_store = SessionStore(session_repo, project_id, history_repo=history_repo)
         await session_store.load()
 
         # Reset paused sessions so agents can work after restart
@@ -222,11 +286,23 @@ class ProjectLifecycleManager:
         broker.set_task_board(task_board)
 
         # Wire task board → WebSocket broadcast on every update
+        # Also cancel agents working on tasks that move to terminal states
         def _task_update_broadcaster(task_id: str):
             asyncio.ensure_future(broker.broadcast_event({
                 "event_type": "task_update",
                 "data": {"task_id": task_id},
             }))
+
+            # If task moved to a terminal state, cancel any agent working on it
+            task = task_board.get_task(task_id)
+            if task and task.status in (TaskStatus.DONE, TaskStatus.CANCELLED):
+                for agent in registry.get_all():
+                    if agent.current_task_id == task_id:
+                        reason = f"task moved to {task.status.value}"
+                        if task.outcome:
+                            reason += f" (outcome={task.outcome})"
+                        asyncio.ensure_future(agent.cancel_current_task(reason))
+
         task_board.set_on_update(_task_update_broadcaster)
 
         # Wire phase board → WebSocket broadcast on every update
@@ -385,6 +461,19 @@ class ProjectLifecycleManager:
                 return db_val
             return os.environ.get(env_key, "")
 
+        # Apply stored provider overrides from session store (persisted across restarts)
+        for agent in registry.get_all():
+            stored_provider = session_store.get_provider(agent.agent_id)
+            if stored_provider:
+                agent._provider_name = stored_provider
+                stored_fb = session_store.get_fallback_provider(agent.agent_id)
+                agent._fallback_provider_name = stored_fb
+                logger.info(
+                    "Applying stored provider override: %s → %s%s",
+                    agent.agent_id, stored_provider,
+                    f" (fallback: {stored_fb})" if stored_fb else "",
+                )
+
         for agent in registry.get_all():
             prov_name = getattr(agent, "_provider_name", "claude-cli")
             fb_name = getattr(agent, "_fallback_provider_name", None)
@@ -472,8 +561,7 @@ class ProjectLifecycleManager:
         for agent in registry.get_all():
             await agent.start()
 
-        # Start broker
-        self._broker_task = asyncio.create_task(broker.start())
+        # NOTE: broker task is managed by activate_project(), not here
 
         # Notify the user-facing agent about the project
         ufa = team_structure.user_facing_agent
@@ -577,7 +665,11 @@ async def run(config_path: Path, host: str, port: int):
         project_store, team_config, config_provider, sf,
     )
 
-    # Activate a project
+    # ── 5. Activate projects ──
+    # Clear stale is_running flags from previous server run
+    await project_repo.clear_running()
+
+    # Resume previously-running projects if any, or activate the active one
     active_project = project_store.get_active_project()
     if active_project:
         state = await lifecycle.activate_project(active_project["id"])
@@ -604,6 +696,7 @@ async def run(config_path: Path, host: str, port: int):
     logger.info("  POLYAGENTIC - Multi-Agent Development System")
     logger.info("  Dashboard: http://%s:%d", host, port)
     logger.info("  Active project: %s", project_store.get_active_project_id())
+    logger.info("  Running projects: %s", lifecycle.get_running_project_ids())
     logger.info("  Agents: %d", len(state["registry"].get_all()))
     logger.info("=" * 60)
 
@@ -611,7 +704,7 @@ async def run(config_path: Path, host: str, port: int):
         await server.serve()
     finally:
         logger.info("Shutting down...")
-        await lifecycle._teardown()
+        await lifecycle.stop_all()
         logger.info("Shutdown complete.")
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -9,6 +10,8 @@ from core.providers.api_provider_base import APIProviderBase
 from core.providers.tool_executor import (
     ToolExecutor,
     build_tool_schemas_anthropic,
+    build_action_schemas_anthropic,
+    is_action_tool,
 )
 
 logger = logging.getLogger(__name__)
@@ -46,6 +49,64 @@ class ClaudeAPIProvider(APIProviderBase):
     DEFAULT_PRICING = (3.00, 15.00)
     ENV_KEY = "ANTHROPIC_API_KEY"
 
+    # -- History conversion -----------------------------------------------
+
+    def _convert_history(self, messages: list[dict]) -> list[dict]:
+        """Convert provider-neutral DB history into Anthropic message format.
+
+        DB stores:
+          - assistant msgs with tool_calls: [{"id", "name", "input"}]
+          - tool result msgs with role="user", tool_call_id, tool_name
+        Anthropic needs:
+          - assistant msgs with content: [{"type":"text",...}, {"type":"tool_use","id","name","input"}]
+          - user msgs with content: [{"type":"tool_result","tool_use_id","content"}]
+        """
+        converted = []
+        # Collect consecutive tool results into a single user message
+        pending_tool_results: list[dict] = []
+
+        def _flush_tool_results():
+            if pending_tool_results:
+                converted.append({
+                    "role": "user",
+                    "content": list(pending_tool_results),
+                })
+                pending_tool_results.clear()
+
+        for msg in messages:
+            role = msg.get("role", "user")
+
+            if role == "assistant" and "tool_calls" in msg:
+                _flush_tool_results()
+                content_blocks = []
+                text = msg.get("content", "")
+                if text:
+                    content_blocks.append({"type": "text", "text": text})
+                for tc in msg["tool_calls"]:
+                    content_blocks.append({
+                        "type": "tool_use",
+                        "id": tc.get("id", ""),
+                        "name": tc.get("name", ""),
+                        "input": tc.get("input", {}),
+                    })
+                converted.append({
+                    "role": "assistant",
+                    "content": content_blocks,
+                })
+            elif "tool_call_id" in msg:
+                # Tool result — accumulate for batch
+                pending_tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": msg["tool_call_id"],
+                    "content": msg.get("content", ""),
+                })
+            else:
+                _flush_tool_results()
+                converted.append(msg)
+
+        _flush_tool_results()
+        return converted
+
     # -- Abstract method implementations --------------------------------
 
     def _get_client(self) -> Any:
@@ -54,8 +115,13 @@ class ClaudeAPIProvider(APIProviderBase):
             self._client = anthropic.AsyncAnthropic(api_key=self._api_key)
         return self._client
 
-    def _build_tool_schemas(self, allowed_tools: str | None) -> list:
-        return build_tool_schemas_anthropic(allowed_tools)
+    def _build_tool_schemas(
+        self, allowed_tools: str | None,
+        allowed_actions: set[str] | None = None,
+    ) -> list:
+        tools = build_tool_schemas_anthropic(allowed_tools)
+        tools.extend(build_action_schemas_anthropic(allowed_actions))
+        return tools
 
     def _inject_system_prompt(
         self, messages: list[dict], system_prompt: str | None,
@@ -151,13 +217,22 @@ class ClaudeAPIProvider(APIProviderBase):
         # Execute each tool and collect results
         tool_results = []
         for tool_block in tool_calls:
+            tool_name = tool_block.name
             logger.info(
                 "Executing tool %s (id=%s) for agent %s",
-                tool_block.name, tool_block.id, self._agent_id,
+                tool_name, tool_block.id, self._agent_id,
             )
-            result = await tool_executor.execute(
-                tool_block.name, tool_block.input or {},
-            )
+
+            if is_action_tool(tool_name):
+                action_payload = {"action": tool_name, **(tool_block.input or {})}
+                block = f"```action\n{json.dumps(action_payload)}\n```"
+                self._action_blocks.append(block)
+                result = f"Action '{tool_name}' queued for execution."
+            else:
+                result = await tool_executor.execute(
+                    tool_name, tool_block.input or {},
+                )
+
             tool_results.append({
                 "type": "tool_result",
                 "tool_use_id": tool_block.id,

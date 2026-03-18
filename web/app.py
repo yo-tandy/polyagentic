@@ -19,6 +19,7 @@ from core.constants import (
 from web.routes import chat, agents, tasks, activity, git, config, ws, projects, knowledge, memory, sessions, conversations, github, uploads, phases, orgs, mcp, templates
 from web.auth import auth_router
 from web.middleware import AuthMiddleware
+from web.state_helpers import apply_project_state
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -47,32 +48,9 @@ def create_app(
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        app.state.registry = app_state["registry"]
-        app.state.broker = app_state["broker"]
-        app.state.task_board = app_state["task_board"]
-        app.state.git_manager = app_state["git_manager"]
-        app.state.team_config = app_state["team_config"]
-        app.state.session_store = app_state["session_store"]
-        app.state.memory_manager = app_state.get("memory_manager")
-        app.state.knowledge_base = app_state.get("knowledge_base")
-        app.state.container_manager = app_state.get("container_manager")
-        app.state.conversation_manager = app_state.get("conversation_manager")
-        app.state.team_structure = app_state.get("team_structure")
-        app.state.action_registry = app_state.get("action_registry")
-        app.state.phase_board = app_state.get("phase_board")
-        app.state.config_provider = app_state.get("config_provider")
-        app.state.team_structure_repo = app_state.get("team_structure_repo")
-        app.state.role_repo = app_state.get("role_repo")
-        app.state.provider_history_repo = app_state.get("provider_history_repo")
-        app.state.project_id = app_state.get("project_id")
-        app.state.user_repo = app_state.get("user_repo")
-        app.state.org_repo = app_state.get("org_repo")
-        app.state.invite_repo = app_state.get("invite_repo")
-        app.state.mcp_repo = app_state.get("mcp_repo")
-        app.state.mcp_manager = app_state.get("mcp_manager")
-        app.state.mcp_registry = app_state.get("mcp_registry")
-        app.state.action_error_repo = app_state.get("action_error_repo")
-        app.state.template_repo = app_state.get("template_repo")
+        # Apply project-scoped state
+        apply_project_state(app, app_state)
+        # Global state (not project-scoped)
         app.state.project_store = project_store
         app.state.lifecycle_manager = lifecycle_manager
         yield

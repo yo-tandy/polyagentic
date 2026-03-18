@@ -452,3 +452,463 @@ def build_tool_schemas_gemini(allowed_tools: str | None) -> list[dict]:
         })
 
     return declarations
+
+
+# ---------------------------------------------------------------------------
+# Structured-action tool definitions
+# ---------------------------------------------------------------------------
+# These mirror the text-based ```action {...}``` protocol so that API
+# providers (OpenAI, Gemini, Claude API) can expose them as native
+# function-calling tools.  The ActionHandler still does the actual
+# execution — the tool executor only wraps these calls into the text
+# format that ActionHandler expects.
+# ---------------------------------------------------------------------------
+
+ACTION_TOOL_DEFINITIONS: dict[str, dict] = {
+    "respond_to_user": {
+        "name": "respond_to_user",
+        "description": (
+            "Send a message to the user. Use for status updates, answers, "
+            "deliverables, and questions."
+        ),
+        "parameters": {
+            "message": {
+                "type": "string",
+                "description": "The message content to send to the user",
+            },
+        },
+        "required": ["message"],
+    },
+    "delegate": {
+        "name": "delegate",
+        "description": (
+            "Delegate work to another team member. Creates a task on the "
+            "board and sends the assignment message."
+        ),
+        "parameters": {
+            "to": {
+                "type": "string",
+                "description": "Agent ID to delegate to",
+            },
+            "task_description": {
+                "type": "string",
+                "description": "Detailed description with acceptance criteria",
+            },
+            "task_title": {
+                "type": "string",
+                "description": "Short title for the task",
+            },
+            "priority": {
+                "type": "integer",
+                "description": "Priority: 1=critical, 2=high, 3=medium, 4=low, 5=backlog",
+            },
+            "labels": {
+                "type": "string",
+                "description": "Comma-separated labels (e.g. 'phase-1,backend')",
+            },
+            "category": {
+                "type": "string",
+                "description": "Task category: 'operational' or 'project'",
+            },
+            "phase_id": {
+                "type": "string",
+                "description": "Phase ID for project tasks",
+            },
+            "estimate": {
+                "type": "integer",
+                "description": "Story point estimate (Fibonacci: 1, 2, 3, 5, 8, 13)",
+            },
+        },
+        "required": ["to", "task_description"],
+    },
+    "assign_ticket": {
+        "name": "assign_ticket",
+        "description": (
+            "Create a task on the board and assign it to a team member. "
+            "Sends the assignment message to the agent."
+        ),
+        "parameters": {
+            "to": {
+                "type": "string",
+                "description": "Agent ID to assign the task to",
+            },
+            "task_title": {
+                "type": "string",
+                "description": "Short descriptive title",
+            },
+            "task_description": {
+                "type": "string",
+                "description": "Detailed description with acceptance criteria",
+            },
+            "priority": {
+                "type": "integer",
+                "description": "Priority: 1=critical, 2=high, 3=medium, 4=low, 5=backlog",
+            },
+            "labels": {
+                "type": "string",
+                "description": "Comma-separated labels (e.g. 'phase-1,backend')",
+            },
+            "category": {
+                "type": "string",
+                "description": "Task category: 'operational' or 'project'",
+            },
+            "phase_id": {
+                "type": "string",
+                "description": "Phase ID for project tasks",
+            },
+            "estimate": {
+                "type": "integer",
+                "description": "Story point estimate (Fibonacci: 1, 2, 3, 5, 8, 13)",
+            },
+        },
+        "required": ["to", "task_title", "task_description"],
+    },
+    "update_task": {
+        "name": "update_task",
+        "description": "Update the status or details of a task on the board.",
+        "parameters": {
+            "task_id": {
+                "type": "string",
+                "description": "The task ID to update",
+            },
+            "status": {
+                "type": "string",
+                "description": "New status: pending, in_progress, review, done, paused, blocked, cancelled",
+            },
+            "completion_summary": {
+                "type": "string",
+                "description": "Summary of what was accomplished (for done status)",
+            },
+            "progress_note": {
+                "type": "string",
+                "description": "Progress update note",
+            },
+            "outcome": {
+                "type": "string",
+                "description": "Review outcome: approved, rejected, complete",
+            },
+            "estimate": {
+                "type": "integer",
+                "description": "Story point estimate (Fibonacci: 1, 2, 3, 5, 8, 13)",
+            },
+        },
+        "required": ["task_id"],
+    },
+    "update_memory": {
+        "name": "update_memory",
+        "description": (
+            "Save notes to your persistent memory. Re-summarize rather "
+            "than appending to keep it concise."
+        ),
+        "parameters": {
+            "memory_type": {
+                "type": "string",
+                "description": "Type of memory: 'project' or 'personality'",
+            },
+            "content": {
+                "type": "string",
+                "description": "Updated memory content",
+            },
+        },
+        "required": ["memory_type", "content"],
+    },
+    "write_document": {
+        "name": "write_document",
+        "description": "Write a new document to the knowledge base.",
+        "parameters": {
+            "title": {
+                "type": "string",
+                "description": "Document title",
+            },
+            "content": {
+                "type": "string",
+                "description": "Document content in markdown",
+            },
+            "category": {
+                "type": "string",
+                "description": "Category: specs, design, architecture, planning, history",
+            },
+        },
+        "required": ["title", "content"],
+    },
+    "read_document": {
+        "name": "read_document",
+        "description": "Read the full content of a document from the project knowledge base.",
+        "parameters": {
+            "doc_id": {
+                "type": "string",
+                "description": "Document ID from the KB index (e.g. 'doc-abc123')",
+            },
+        },
+        "required": ["doc_id"],
+    },
+    "update_document": {
+        "name": "update_document",
+        "description": "Update an existing document in the knowledge base.",
+        "parameters": {
+            "doc_id": {
+                "type": "string",
+                "description": "Document ID to update",
+            },
+            "content": {
+                "type": "string",
+                "description": "Full updated content in markdown",
+            },
+        },
+        "required": ["doc_id", "content"],
+    },
+    "resolve_comments": {
+        "name": "resolve_comments",
+        "description": "Mark document comments as resolved.",
+        "parameters": {
+            "doc_id": {
+                "type": "string",
+                "description": "Document ID",
+            },
+            "resolutions": {
+                "type": "string",
+                "description": "JSON array of {comment_id, resolution} objects",
+            },
+        },
+        "required": ["doc_id", "resolutions"],
+    },
+    "start_conversation": {
+        "name": "start_conversation",
+        "description": "Start an interactive conversation with the user.",
+        "parameters": {
+            "title": {
+                "type": "string",
+                "description": "Conversation topic",
+            },
+            "goals": {
+                "type": "string",
+                "description": "JSON array of what you want to learn or decide",
+            },
+        },
+        "required": ["title", "goals"],
+    },
+    "end_conversation": {
+        "name": "end_conversation",
+        "description": "End an active conversation with the user.",
+        "parameters": {
+            "summary": {
+                "type": "string",
+                "description": "Summary of discussion and decisions made",
+            },
+        },
+        "required": ["summary"],
+    },
+    "create_phase": {
+        "name": "create_phase",
+        "description": "Create a new project phase.",
+        "parameters": {
+            "name": {
+                "type": "string",
+                "description": "Phase name",
+            },
+            "description": {
+                "type": "string",
+                "description": "What this phase covers",
+            },
+            "ordering": {
+                "type": "integer",
+                "description": "Phase sequence number (1, 2, 3...)",
+            },
+        },
+        "required": ["name", "description"],
+    },
+    "update_phase": {
+        "name": "update_phase",
+        "description": "Update a phase status or properties.",
+        "parameters": {
+            "phase_id": {
+                "type": "string",
+                "description": "The phase ID to update",
+            },
+            "status": {
+                "type": "string",
+                "description": "New status: planning, awaiting_approval, in_progress, review, completed",
+            },
+            "planning_doc_id": {
+                "type": "string",
+                "description": "KB doc ID for the phase planning document",
+            },
+            "review_doc_id": {
+                "type": "string",
+                "description": "KB doc ID for the phase review document",
+            },
+        },
+        "required": ["phase_id"],
+    },
+    "create_batch_tickets": {
+        "name": "create_batch_tickets",
+        "description": "Create multiple draft tickets for a phase at once.",
+        "parameters": {
+            "phase_id": {
+                "type": "string",
+                "description": "Phase to add tickets to",
+            },
+            "tickets": {
+                "type": "string",
+                "description": (
+                    "JSON array of ticket objects with: title, description, "
+                    "priority, labels, role, estimate"
+                ),
+            },
+        },
+        "required": ["phase_id", "tickets"],
+    },
+    "start_task": {
+        "name": "start_task",
+        "description": "Start or resume a paused task.",
+        "parameters": {
+            "agent_id": {
+                "type": "string",
+                "description": "Agent to assign",
+            },
+            "task_id": {
+                "type": "string",
+                "description": "Task to start/resume",
+            },
+        },
+        "required": ["agent_id", "task_id"],
+    },
+    "pause_task": {
+        "name": "pause_task",
+        "description": "Pause an agent's in-progress task.",
+        "parameters": {
+            "agent_id": {
+                "type": "string",
+                "description": "Agent to pause",
+            },
+            "task_id": {
+                "type": "string",
+                "description": "Task to pause",
+            },
+        },
+        "required": ["agent_id", "task_id"],
+    },
+    "request_capability": {
+        "name": "request_capability",
+        "description": (
+            "Flag a missing capability so that Robot Resources can find "
+            "and deploy an MCP server for you."
+        ),
+        "parameters": {
+            "capability": {
+                "type": "string",
+                "description": "What capability is needed",
+            },
+            "context": {
+                "type": "string",
+                "description": "Why you need this capability",
+            },
+        },
+        "required": ["capability"],
+    },
+}
+
+
+def build_action_schemas_openai(allowed_actions: set[str] | None) -> list[dict]:
+    """Build OpenAI function-calling tool definitions for structured actions.
+
+    Only includes actions that are in the agent's ``allowed_actions`` set.
+    """
+    if not allowed_actions:
+        return []
+
+    tools = []
+    for action_name in allowed_actions:
+        defn = ACTION_TOOL_DEFINITIONS.get(action_name)
+        if not defn:
+            continue
+
+        properties = {}
+        for pname, pinfo in defn["parameters"].items():
+            properties[pname] = {
+                "type": pinfo["type"],
+                "description": pinfo["description"],
+            }
+
+        tools.append({
+            "type": "function",
+            "function": {
+                "name": defn["name"],
+                "description": defn["description"],
+                "parameters": {
+                    "type": "object",
+                    "properties": properties,
+                    "required": defn.get("required", []),
+                },
+            },
+        })
+
+    return tools
+
+
+def build_action_schemas_anthropic(allowed_actions: set[str] | None) -> list[dict]:
+    """Build Anthropic API tool definitions for structured actions."""
+    if not allowed_actions:
+        return []
+
+    tools = []
+    for action_name in allowed_actions:
+        defn = ACTION_TOOL_DEFINITIONS.get(action_name)
+        if not defn:
+            continue
+
+        properties = {}
+        for pname, pinfo in defn["parameters"].items():
+            properties[pname] = {
+                "type": pinfo["type"],
+                "description": pinfo["description"],
+            }
+
+        tools.append({
+            "name": defn["name"],
+            "description": defn["description"],
+            "input_schema": {
+                "type": "object",
+                "properties": properties,
+                "required": defn.get("required", []),
+            },
+        })
+
+    return tools
+
+
+def build_action_schemas_gemini(allowed_actions: set[str] | None) -> list[dict]:
+    """Build Gemini tool definitions for structured actions."""
+    if not allowed_actions:
+        return []
+
+    declarations = []
+    for action_name in allowed_actions:
+        defn = ACTION_TOOL_DEFINITIONS.get(action_name)
+        if not defn:
+            continue
+
+        properties = {}
+        for pname, pinfo in defn["parameters"].items():
+            gtype = pinfo["type"].upper()
+            properties[pname] = {
+                "type": gtype,
+                "description": pinfo["description"],
+            }
+
+        declarations.append({
+            "name": defn["name"],
+            "description": defn["description"],
+            "parameters": {
+                "type": "OBJECT",
+                "properties": properties,
+                "required": defn.get("required", []),
+            },
+        })
+
+    return declarations
+
+
+def is_action_tool(tool_name: str) -> bool:
+    """Check whether a tool name is a structured action (vs a file tool)."""
+    return tool_name in ACTION_TOOL_DEFINITIONS

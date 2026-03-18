@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Polyagentic Dashboard</title>
     <link rel="stylesheet" href="/static/css/main.css?v=2">
-    <link rel="stylesheet" href="/static/css/dashboard.css?v=8">
+    <link rel="stylesheet" href="/static/css/dashboard.css?v=11">
 </head>
 <body>
     <header class="header">
@@ -17,6 +17,7 @@
             </div>
         </div>
         <div class="header__actions">
+            <button class="header__btn" id="projects-dashboard-btn">Projects</button>
             <button class="header__btn" id="project-info-btn">Project Info</button>
             <button class="header__btn" id="team-config-btn">Team Config</button>
             <span class="header__status" id="connection-status">Connecting...</span>
@@ -28,6 +29,12 @@
             </div>
         </div>
     </header>
+
+    <!-- Reactivate Bar (shown when viewing a stopped project) -->
+    <div class="reactivate-bar" id="reactivate-bar" style="display:none;">
+        <span class="reactivate-bar__text">⚠️ This project is not running. Agents are stopped.</span>
+        <button class="btn btn--primary reactivate-bar__btn" id="reactivate-btn">Re-activate Project</button>
+    </div>
 
     <main class="dashboard">
         <section class="panel panel--agents" id="agents-panel">
@@ -291,10 +298,72 @@
         </div>
     </div>
 
+    <!-- Agent Diagnostics Modal -->
+    <div class="modal-overlay" id="diagnostics-modal">
+        <div class="modal modal--diagnostics">
+            <div class="modal__header">
+                <h2 class="modal__title" id="diagnostics-modal-title">Agent Diagnostics</h2>
+                <button class="modal__close" id="diagnostics-modal-close">&times;</button>
+            </div>
+            <div class="modal__body" id="diagnostics-modal-body">
+                <div class="diagnostics-loading">Loading...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Project Switch Confirmation Modal -->
+    <div class="modal-overlay" id="switch-confirm-modal">
+        <div class="modal modal--switch-confirm">
+            <div class="modal__header">
+                <h2 class="modal__title" id="switch-confirm-title">Switching Project</h2>
+                <button class="modal__close" id="switch-confirm-close">&times;</button>
+            </div>
+            <div class="modal__body">
+                <p id="switch-confirm-text">Do you want to keep the current project running in the background?</p>
+                <div class="switch-confirm__actions">
+                    <button class="btn btn--primary" id="switch-keep-running-btn">Keep Running</button>
+                    <button class="btn btn--danger" id="switch-stop-btn">Stop Project</button>
+                    <button class="btn btn--secondary" id="switch-cancel-btn">Cancel</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Inactive Project Confirmation Modal -->
+    <div class="modal-overlay" id="inactive-confirm-modal">
+        <div class="modal modal--switch-confirm">
+            <div class="modal__header">
+                <h2 class="modal__title" id="inactive-confirm-title">Project Not Running</h2>
+                <button class="modal__close" id="inactive-confirm-close">&times;</button>
+            </div>
+            <div class="modal__body">
+                <p id="inactive-confirm-text">This project is not running. Would you like to re-activate it?</p>
+                <div class="switch-confirm__actions">
+                    <button class="btn btn--primary" id="inactive-activate-btn">Activate &amp; Open</button>
+                    <button class="btn btn--secondary" id="inactive-readonly-btn">Open Read-Only</button>
+                    <button class="btn btn--secondary" id="inactive-cancel-btn">Cancel</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Projects Dashboard Modal -->
+    <div class="modal-overlay" id="projects-dashboard-modal">
+        <div class="modal modal--projects-dashboard">
+            <div class="modal__header">
+                <h2 class="modal__title">Projects Dashboard</h2>
+                <button class="modal__close" id="projects-dashboard-close">&times;</button>
+            </div>
+            <div class="modal__body" id="projects-dashboard-body">
+                <div class="diagnostics-loading">Loading...</div>
+            </div>
+        </div>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/marked@15.0.4/marked.min.js"></script>
-    <script src="/static/js/components/projectSelector.js?v=2"></script>
-    <script src="/static/js/components/agentPanel.js?v=5"></script>
-    <script src="/static/js/components/taskBoard.js?v=4"></script>
+    <script src="/static/js/components/projectSelector.js?v=3"></script>
+    <script src="/static/js/components/agentPanel.js?v=6"></script>
+    <script src="/static/js/components/taskBoard.js?v=5"></script>
     <script src="/static/js/components/chatView.js?v=3"></script>
     <script src="/static/js/components/activityLog.js?v=2"></script>
     <script src="/static/js/components/gitPanel.js?v=2"></script>
@@ -304,6 +373,7 @@
     <script src="/static/js/components/conversationBar.js?v=2"></script>
     <script src="/static/js/components/conversationWindow.js?v=2"></script>
     <script src="/static/js/components/projectInfo.js?v=2"></script>
-    <script src="/static/js/app.js?v=6"></script>
+    <script src="/static/js/components/projectsDashboard.js?v=1"></script>
+    <script src="/static/js/app.js?v=7"></script>
 </body>
 </html>

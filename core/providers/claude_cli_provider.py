@@ -29,7 +29,9 @@ class ClaudeCLIProvider(BaseProvider):
         timeout: int = 300,
         max_budget_usd: float | None = None,
         mcp_config_path: Path | None = None,
+        allowed_actions: set[str] | None = None,
     ) -> SubprocessResult:
+        # CLI uses text-based ```action``` blocks; allowed_actions is ignored
         return await self._subprocess.invoke(
             prompt=prompt,
             system_prompt=system_prompt,

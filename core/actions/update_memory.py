@@ -39,6 +39,7 @@ class UpdateMemory(BaseAction):
         content = action.get("content", "")
         if not content:
             return []
+        agent._memory_updated = True  # signal to enforcement check in message loop
         if memory_type == "personality":
             await agent._memory_manager.update_personality_memory(
                 agent.agent_id, content,

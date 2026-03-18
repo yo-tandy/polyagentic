@@ -10,6 +10,8 @@ from core.providers.api_provider_base import APIProviderBase
 from core.providers.tool_executor import (
     ToolExecutor,
     build_tool_schemas_openai,
+    build_action_schemas_openai,
+    is_action_tool,
 )
 
 logger = logging.getLogger(__name__)
@@ -52,6 +54,51 @@ class OpenAIProvider(APIProviderBase):
     DEFAULT_PRICING = (2.50, 10.00)
     ENV_KEY = "OPENAI_API_KEY"
 
+    # -- History conversion -----------------------------------------------
+
+    def _convert_history(self, messages: list[dict]) -> list[dict]:
+        """Convert provider-neutral DB history into OpenAI message format.
+
+        DB stores:
+          - assistant msgs with tool_calls: [{"id", "name", "input"}]
+          - tool msgs with tool_call_id, tool_name, content
+        OpenAI needs:
+          - assistant msgs with tool_calls: [{"id", "type": "function",
+              "function": {"name", "arguments"}}]
+          - tool msgs with role: "tool", tool_call_id, content
+        """
+        converted = []
+        for msg in messages:
+            role = msg.get("role", "user")
+
+            if role == "assistant" and "tool_calls" in msg:
+                tc_list = msg["tool_calls"]
+                converted.append({
+                    "role": "assistant",
+                    "content": msg.get("content", "") or "",
+                    "tool_calls": [
+                        {
+                            "id": tc.get("id", ""),
+                            "type": "function",
+                            "function": {
+                                "name": tc.get("name", ""),
+                                "arguments": json.dumps(tc.get("input", {})),
+                            },
+                        }
+                        for tc in tc_list
+                    ],
+                })
+            elif role == "tool" or "tool_call_id" in msg:
+                converted.append({
+                    "role": "tool",
+                    "tool_call_id": msg.get("tool_call_id", ""),
+                    "content": msg.get("content", ""),
+                })
+            else:
+                converted.append(msg)
+
+        return converted
+
     # -- Abstract method implementations --------------------------------
 
     def _get_client(self) -> Any:
@@ -60,8 +107,13 @@ class OpenAIProvider(APIProviderBase):
             self._client = AsyncOpenAI(api_key=self._api_key)
         return self._client
 
-    def _build_tool_schemas(self, allowed_tools: str | None) -> list:
-        return build_tool_schemas_openai(allowed_tools)
+    def _build_tool_schemas(
+        self, allowed_tools: str | None,
+        allowed_actions: set[str] | None = None,
+    ) -> list:
+        tools = build_tool_schemas_openai(allowed_tools)
+        tools.extend(build_action_schemas_openai(allowed_actions))
+        return tools
 
     def _inject_system_prompt(
         self, messages: list[dict], system_prompt: str | None,
@@ -165,7 +217,16 @@ class OpenAIProvider(APIProviderBase):
                 "Executing tool %s (id=%s) for agent %s",
                 tool_name, tc.id, self._agent_id,
             )
-            result = await tool_executor.execute(tool_name, tool_args)
+
+            if is_action_tool(tool_name):
+                # Structured action — convert to text-based ```action```
+                # block so ActionHandler can parse it from the result.
+                action_payload = {"action": tool_name, **tool_args}
+                block = f"```action\n{json.dumps(action_payload)}\n```"
+                self._action_blocks.append(block)
+                result = f"Action '{tool_name}' queued for execution."
+            else:
+                result = await tool_executor.execute(tool_name, tool_args)
 
             # OpenAI expects tool results as separate messages
             messages.append({

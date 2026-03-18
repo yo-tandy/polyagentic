@@ -19,6 +19,8 @@ class AgentSession(Base, TimestampMixin, TenantMixin):
     session_id: Mapped[str] = mapped_column(String(200), default="")
     state: Mapped[str] = mapped_column(String(20), default="active")
     model: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    provider: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    fallback_provider: Mapped[str | None] = mapped_column(String(20), nullable=True)
     prompt_hash: Mapped[str | None] = mapped_column(String(20), nullable=True)
     request_count: Mapped[int] = mapped_column(Integer, default=0)
     error_count: Mapped[int] = mapped_column(Integer, default=0)

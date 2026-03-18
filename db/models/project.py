@@ -18,6 +18,7 @@ class Project(Base, TimestampMixin, TenantMixin):
     main_branch: Mapped[str] = mapped_column(String(100), default="main")
     github_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_running: Mapped[bool] = mapped_column(Boolean, default=False)
 
     custom_agents: Mapped[list[CustomAgentDef]] = relationship(
         back_populates="project", cascade="all, delete-orphan",

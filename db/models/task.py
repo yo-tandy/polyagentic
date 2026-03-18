@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import ForeignKey, Integer, JSON, String, Text, Index
+from sqlalchemy import Boolean, ForeignKey, Integer, JSON, String, Text, Index
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from db.models.base import Base, TimestampMixin, TenantMixin
@@ -37,6 +37,7 @@ class TaskModel(Base, TimestampMixin, TenantMixin):
     outcome: Mapped[str | None] = mapped_column(String(50), nullable=True)
     completion_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     review_output: Mapped[str | None] = mapped_column(Text, nullable=True)
+    scope_approved: Mapped[bool] = mapped_column(Boolean, default=False)
     started_at: Mapped[str | None] = mapped_column(String(50), nullable=True)
     completed_at: Mapped[str | None] = mapped_column(String(50), nullable=True)
 

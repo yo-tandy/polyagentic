@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from core.providers.base import BaseProvider
-from core.providers.tool_executor import ToolExecutor
+from core.providers.tool_executor import ToolExecutor, is_action_tool
 from core.subprocess_manager import SubprocessResult
 
 logger = logging.getLogger(__name__)
@@ -71,18 +71,35 @@ class APIProviderBase(BaseProvider):
         working_dir: Path | None = None,
         timeout: int = 300,
         max_budget_usd: float | None = None,
+        mcp_config_path: Path | None = None,
+        allowed_actions: set[str] | None = None,
     ) -> SubprocessResult:
         start_ms = time.monotonic_ns() // 1_000_000
         resolved_model = self.MODEL_MAP.get(model, model)
         tool_executor = ToolExecutor(working_dir) if working_dir else ToolExecutor()
 
         # Build tool schemas in the provider's native format
-        tools = self._build_tool_schemas(allowed_tools)
+        tools = self._build_tool_schemas(allowed_tools, allowed_actions)
+
+        # Track action tool calls — converted to text-based ```action```
+        # blocks in the result so ActionHandler can parse them.
+        self._action_blocks: list[str] = []
 
         # -- Session management (common) --------------------------------
         messages: list[dict] = []
+
+        # Only reuse session IDs that belong to this provider (psess_* prefix).
+        # Ignore stale Claude CLI UUIDs that may linger after a provider switch.
+        if session_id and not session_id.startswith("psess_"):
+            logger.debug(
+                "Ignoring non-provider session ID %s for agent %s",
+                session_id, self._agent_id,
+            )
+            session_id = None
+
         if session_id and self._history_repo:
             messages = await self._history_repo.get_history(session_id)
+            messages = self._convert_history(messages)
         if not session_id and self._history_repo:
             session_id = await self._history_repo.create_session(
                 self._project_id, self._agent_id,
@@ -130,6 +147,12 @@ class APIProviderBase(BaseProvider):
                 if not tool_calls:
                     # No (more) tool calls -- extract final text
                     result_text = self._extract_text(response)
+
+                    # Append any accumulated action blocks so ActionHandler
+                    # can parse them from the result text.
+                    if self._action_blocks:
+                        action_text = "\n".join(self._action_blocks)
+                        result_text = f"{result_text}\n\n{action_text}" if result_text else action_text
 
                     # Persist final assistant message
                     if self._history_repo and session_id:
@@ -209,6 +232,17 @@ class APIProviderBase(BaseProvider):
         output_cost = (output_tokens / 1_000_000) * prices[1]
         return round(input_cost + output_cost, 6)
 
+    def _convert_history(self, messages: list[dict]) -> list[dict]:
+        """Convert provider-neutral history into this provider's format.
+
+        The DB stores tool_calls as ``[{"id", "name", "input"}, ...]``
+        and tool results as ``{"tool_call_id", "tool_name", "content"}``.
+        Each provider must convert these into its native API format.
+
+        Default: pass-through (subclasses override).
+        """
+        return messages
+
     # -- Abstract methods subclasses must implement ----------------------
 
     @abstractmethod
@@ -217,8 +251,15 @@ class APIProviderBase(BaseProvider):
         ...
 
     @abstractmethod
-    def _build_tool_schemas(self, allowed_tools: str | None) -> list:
-        """Build tool schemas in the provider's native format."""
+    def _build_tool_schemas(
+        self, allowed_tools: str | None,
+        allowed_actions: set[str] | None = None,
+    ) -> list:
+        """Build tool schemas in the provider's native format.
+
+        Includes both file tools (from ``allowed_tools``) and structured
+        action tools (from ``allowed_actions``).
+        """
         ...
 
     @abstractmethod

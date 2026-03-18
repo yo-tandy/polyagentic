@@ -358,13 +358,20 @@ const ConversationWindow = {
     },
 
     _renderMarkdown(text) {
+        let html;
         if (typeof marked !== 'undefined') {
             try {
-                return marked.parse(text || '');
+                html = marked.parse(text || '');
             } catch (e) {
-                return this._escapeHtml(text || '');
+                html = this._escapeHtml(text || '');
             }
+        } else {
+            html = this._escapeHtml(text || '');
         }
-        return this._escapeHtml(text || '');
+        // Make task IDs clickable
+        if (typeof linkifyTaskIds === 'function') {
+            html = linkifyTaskIds(html);
+        }
+        return html;
     },
 };

@@ -131,12 +131,22 @@ class ActionRegistry:
         # ── Execute ───────────────────────────────────────────────────
         try:
             return await action.execute(agent, action_dict, original_msg, ctx)
-        except Exception:
+        except Exception as exc:
             logger.exception(
                 "Error executing action '%s' for agent %s",
                 action_name, agent.agent_id,
             )
-            return []
+            return [Message(
+                sender="system",
+                recipient=agent.agent_id,
+                type=MessageType.SYSTEM,
+                content=(
+                    f"[Action Execution Error] Your `{action_name}` action raised "
+                    f"an exception:\n{type(exc).__name__}: {exc}\n\n"
+                    "Please check the action parameters and try again."
+                ),
+                metadata={"no_reply": True},
+            )]
 
     async def execute_all(
         self,

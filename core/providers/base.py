@@ -27,10 +27,13 @@ class BaseProvider(ABC):
         timeout: int = 300,
         max_budget_usd: float | None = None,
         mcp_config_path: Path | None = None,
+        allowed_actions: set[str] | None = None,
     ) -> SubprocessResult:
         """Send a prompt to the model and return the result.
 
         Parameters match SubprocessManager.invoke() for drop-in compatibility.
+        ``allowed_actions`` is used by API providers to expose structured
+        actions as native function-calling tools.
         """
         ...
 

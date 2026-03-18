@@ -39,6 +39,9 @@ class SubprocessResult:
 
 class SubprocessManager:
 
+    def __init__(self):
+        self._current_proc: asyncio.subprocess.Process | None = None
+
     # Class-level auth coordination — shared across all SubprocessManager instances.
     # Since the app is single-process async, asyncio.Lock is sufficient.
     _auth_lock: asyncio.Lock = asyncio.Lock()
@@ -200,6 +203,21 @@ class SubprocessManager:
 
         return cmd
 
+    def cancel(self):
+        """Terminate the running subprocess, if any.
+
+        Safe to call from any context (sync).  Handles the race where the
+        process has already exited naturally.
+        """
+        proc = self._current_proc
+        if proc is None:
+            return
+        try:
+            proc.terminate()
+            logger.info("Subprocess terminated (pid=%s)", proc.pid)
+        except ProcessLookupError:
+            logger.debug("Subprocess already exited (pid=%s)", proc.pid)
+
     async def _execute(
         self, cmd: list[str], working_dir: Path | None, timeout: int
     ) -> tuple[bytes, bytes, int]:
@@ -217,10 +235,14 @@ class SubprocessManager:
             cwd=str(working_dir) if working_dir else None,
             env=env,
         )
-        stdout, stderr = await asyncio.wait_for(
-            proc.communicate(), timeout=timeout
-        )
-        return stdout, stderr, proc.returncode
+        self._current_proc = proc
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(), timeout=timeout
+            )
+            return stdout, stderr, proc.returncode
+        finally:
+            self._current_proc = None
 
     async def invoke(
         self,
@@ -443,6 +465,7 @@ class DockerSubprocessManager(SubprocessManager):
     """Executes Claude CLI inside a Docker container via `docker exec`."""
 
     def __init__(self, container_name: str):
+        super().__init__()
         self.container_name = container_name
 
     async def _execute(
@@ -457,7 +480,11 @@ class DockerSubprocessManager(SubprocessManager):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await asyncio.wait_for(
-            proc.communicate(), timeout=timeout
-        )
-        return stdout, stderr, proc.returncode
+        self._current_proc = proc
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(), timeout=timeout
+            )
+            return stdout, stderr, proc.returncode
+        finally:
+            self._current_proc = None

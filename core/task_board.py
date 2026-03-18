@@ -16,13 +16,14 @@ logger = logging.getLogger(__name__)
 PRIVILEGED_AGENTS = {"user", "manny", "jerry"}
 
 VALID_TRANSITIONS = {
-    TaskStatus.DRAFT:       {TaskStatus.PENDING, TaskStatus.IN_PROGRESS},
-    TaskStatus.PENDING:     {TaskStatus.IN_PROGRESS, TaskStatus.BLOCKED, TaskStatus.PAUSED, TaskStatus.DRAFT},
-    TaskStatus.IN_PROGRESS: {TaskStatus.REVIEW, TaskStatus.DONE, TaskStatus.BLOCKED, TaskStatus.PAUSED, TaskStatus.PENDING},
-    TaskStatus.REVIEW:      {TaskStatus.DONE, TaskStatus.IN_PROGRESS, TaskStatus.PENDING},
-    TaskStatus.BLOCKED:     {TaskStatus.PENDING, TaskStatus.IN_PROGRESS},
-    TaskStatus.PAUSED:      {TaskStatus.IN_PROGRESS, TaskStatus.PENDING},
+    TaskStatus.DRAFT:       {TaskStatus.PENDING, TaskStatus.IN_PROGRESS, TaskStatus.CANCELLED},
+    TaskStatus.PENDING:     {TaskStatus.IN_PROGRESS, TaskStatus.BLOCKED, TaskStatus.PAUSED, TaskStatus.DRAFT, TaskStatus.CANCELLED},
+    TaskStatus.IN_PROGRESS: {TaskStatus.REVIEW, TaskStatus.DONE, TaskStatus.BLOCKED, TaskStatus.PAUSED, TaskStatus.PENDING, TaskStatus.CANCELLED},
+    TaskStatus.REVIEW:      {TaskStatus.DONE, TaskStatus.IN_PROGRESS, TaskStatus.PENDING, TaskStatus.CANCELLED},
+    TaskStatus.BLOCKED:     {TaskStatus.PENDING, TaskStatus.IN_PROGRESS, TaskStatus.CANCELLED},
+    TaskStatus.PAUSED:      {TaskStatus.IN_PROGRESS, TaskStatus.PENDING, TaskStatus.CANCELLED},
     TaskStatus.DONE:        {TaskStatus.PENDING},  # reopen
+    TaskStatus.CANCELLED:   {TaskStatus.PENDING},  # reopen
 }
 
 
@@ -62,7 +63,8 @@ class TaskBoard:
                           category: str = "operational",
                           phase_id: str | None = None,
                           initial_status: TaskStatus | None = None,
-                          estimate: int | None = None) -> Task:
+                          estimate: int | None = None,
+                          scope_approved: bool = False) -> Task:
         status = initial_status or TaskStatus.PENDING
         task = Task(
             title=title,
@@ -77,6 +79,7 @@ class TaskBoard:
             category=category,
             phase_id=phase_id,
             estimate=estimate,
+            scope_approved=scope_approved,
         )
         # Write to DB
         await self._repo.create(
@@ -95,6 +98,7 @@ class TaskBoard:
             category=task.category,
             phase_id=task.phase_id,
             estimate=task.estimate,
+            scope_approved=task.scope_approved,
         )
         # Update cache
         self._tasks[task.id] = task
@@ -148,6 +152,20 @@ class TaskBoard:
                             task.status.value, new_status.value, task_id, agent_id,
                         )
                         return None
+                # Review gate: redirect project tasks to REVIEW instead of
+                # DONE so the reviewer can inspect the deliverable first.
+                # Only applies when moving from IN_PROGRESS and the task is
+                # a project task (not operational/decomposition subtasks).
+                if (new_status == TaskStatus.DONE
+                        and task.status == TaskStatus.IN_PROGRESS
+                        and task.category == "project"
+                        and kwargs.get("outcome") != "rejected"):
+                    new_status = TaskStatus.REVIEW
+                    logger.info(
+                        "Review gate: redirected task %s to REVIEW (project task)",
+                        task_id,
+                    )
+
                 kwargs["status"] = new_status
 
                 # Default reviewer when moving to review
@@ -237,6 +255,23 @@ class TaskBoard:
 
         return sorted(tasks, key=sort_key)
 
+    def get_workable_tasks(self, agent_id: str, agent_role: str | None = None) -> list[Task]:
+        """Return PENDING/IN_PROGRESS tasks this agent can work on (direct + role-based).
+
+        Unlike get_tasks_for_agent, this excludes reviewer-only matches and
+        filters to actionable statuses only.
+        """
+        tasks = []
+        for t in self._tasks.values():
+            if t.status not in (TaskStatus.PENDING, TaskStatus.IN_PROGRESS):
+                continue
+            if t.assignee == agent_id:
+                tasks.append(t)
+            elif (agent_role and t.role and t.role == agent_role
+                  and t.assignee is None and t.status == TaskStatus.PENDING):
+                tasks.append(t)
+        return sorted(tasks, key=lambda t: (t.priority, t.created_at))
+
     def get_tasks_by_phase(self, phase_id: str) -> list[Task]:
         return [t for t in self._tasks.values() if t.phase_id == phase_id]
 
@@ -295,6 +330,7 @@ class TaskBoard:
             subtasks=rec.subtasks or [],
             messages=rec.messages or [],
             estimate=getattr(rec, "estimate", None),
+            scope_approved=bool(getattr(rec, "scope_approved", False)),
             started_at=getattr(rec, "started_at", None),
             completed_at=getattr(rec, "completed_at", None),
         )

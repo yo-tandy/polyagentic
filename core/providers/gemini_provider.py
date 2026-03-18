@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -9,6 +10,8 @@ from core.providers.api_provider_base import APIProviderBase
 from core.providers.tool_executor import (
     ToolExecutor,
     build_tool_schemas_gemini,
+    build_action_schemas_gemini,
+    is_action_tool,
 )
 
 logger = logging.getLogger(__name__)
@@ -51,8 +54,13 @@ class GeminiProvider(APIProviderBase):
             self._client = genai.Client(api_key=self._api_key)
         return self._client
 
-    def _build_tool_schemas(self, allowed_tools: str | None) -> list:
-        return build_tool_schemas_gemini(allowed_tools)
+    def _build_tool_schemas(
+        self, allowed_tools: str | None,
+        allowed_actions: set[str] | None = None,
+    ) -> list:
+        tools = build_tool_schemas_gemini(allowed_tools)
+        tools.extend(build_action_schemas_gemini(allowed_actions))
+        return tools
 
     def _inject_system_prompt(
         self, messages: list[dict], system_prompt: str | None,
@@ -166,7 +174,15 @@ class GeminiProvider(APIProviderBase):
                 "Executing tool %s for agent %s",
                 tool_name, self._agent_id,
             )
-            result = await tool_executor.execute(tool_name, tool_args)
+
+            if is_action_tool(tool_name):
+                action_payload = {"action": tool_name, **tool_args}
+                block = f"```action\n{json.dumps(action_payload)}\n```"
+                self._action_blocks.append(block)
+                result = f"Action '{tool_name}' queued for execution."
+            else:
+                result = await tool_executor.execute(tool_name, tool_args)
+
             tool_results.append({
                 "name": tool_name,
                 "result": result,
@@ -189,6 +205,58 @@ class GeminiProvider(APIProviderBase):
             "content": "",
             "_function_responses": tool_results,
         })
+
+    # -- History conversion -----------------------------------------------
+
+    def _convert_history(self, messages: list[dict]) -> list[dict]:
+        """Convert provider-neutral DB history into Gemini message format.
+
+        DB stores:
+          - assistant msgs with tool_calls: [{"id", "name", "input"}]
+          - tool result msgs with tool_call_id, tool_name, content
+        Gemini needs:
+          - assistant msgs with _function_calls: [{"name", "args"}]
+          - tool msgs with _function_responses: [{"name", "result"}]
+        """
+        converted = []
+        pending_responses: list[dict] = []
+
+        def _flush_responses():
+            if pending_responses:
+                converted.append({
+                    "role": "tool",
+                    "content": "",
+                    "_function_responses": list(pending_responses),
+                })
+                pending_responses.clear()
+
+        for msg in messages:
+            role = msg.get("role", "user")
+
+            if role == "assistant" and "tool_calls" in msg:
+                _flush_responses()
+                converted.append({
+                    "role": "assistant",
+                    "content": msg.get("content", "") or "",
+                    "_function_calls": [
+                        {
+                            "name": tc.get("name", ""),
+                            "args": tc.get("input", {}),
+                        }
+                        for tc in msg["tool_calls"]
+                    ],
+                })
+            elif "tool_call_id" in msg:
+                pending_responses.append({
+                    "name": msg.get("tool_name", ""),
+                    "result": msg.get("content", ""),
+                })
+            else:
+                _flush_responses()
+                converted.append(msg)
+
+        _flush_responses()
+        return converted
 
     # -- Gemini-specific helpers ----------------------------------------
 

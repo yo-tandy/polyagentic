@@ -6,6 +6,8 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from web.state_helpers import apply_project_state
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
@@ -23,10 +25,20 @@ class CreateProjectRequest(BaseModel):
 @router.get("/projects")
 async def list_projects(request: Request):
     project_store = request.app.state.project_store
+    lifecycle = request.app.state.lifecycle_manager
     if not project_store:
         return {"projects": [], "active_project_id": None}
+
+    projects = project_store.list_projects()
+    viewed_id = lifecycle.viewed_project_id if lifecycle else None
+
+    # Enrich with running/viewed flags
+    for p in projects:
+        p["is_running"] = lifecycle.is_running(p["id"]) if lifecycle else False
+        p["is_viewed"] = p["id"] == viewed_id
+
     return {
-        "projects": project_store.list_projects(),
+        "projects": projects,
         "active_project_id": project_store.get_active_project_id(),
     }
 
@@ -68,24 +80,97 @@ async def activate_project(project_id: str, request: Request):
 
     try:
         new_state = await lifecycle.activate_project(project_id)
-        # Update app state references
-        request.app.state.registry = new_state["registry"]
-        request.app.state.broker = new_state["broker"]
-        request.app.state.task_board = new_state["task_board"]
-        request.app.state.git_manager = new_state["git_manager"]
-        request.app.state.session_store = new_state["session_store"]
-        request.app.state.memory_manager = new_state.get("memory_manager")
-        request.app.state.knowledge_base = new_state.get("knowledge_base")
-        request.app.state.container_manager = new_state.get("container_manager")
-        request.app.state.conversation_manager = new_state.get("conversation_manager")
-        request.app.state.team_structure = new_state.get("team_structure")
-        request.app.state.template_repo = new_state.get("template_repo")
+        # Swap app.state to the newly viewed project
+        apply_project_state(request.app, new_state)
 
         logger.info("Switched to project '%s'", project_id)
         return {"status": "activated", "project": project}
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
     except Exception as e:
         logger.exception("Failed to activate project %s", project_id)
         return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@router.post("/projects/{project_id}/stop")
+async def stop_project(project_id: str, request: Request):
+    """Stop a running background project."""
+    lifecycle = request.app.state.lifecycle_manager
+    if not lifecycle:
+        return JSONResponse({"error": "Lifecycle manager not available"}, status_code=503)
+
+    if not lifecycle.is_running(project_id):
+        return JSONResponse({"error": f"Project '{project_id}' is not running"}, status_code=400)
+
+    if lifecycle.viewed_project_id == project_id:
+        return JSONResponse(
+            {"error": "Cannot stop the currently viewed project. Switch to another project first."},
+            status_code=400,
+        )
+
+    await lifecycle.stop_project(project_id)
+    return {"status": "stopped", "project_id": project_id}
+
+
+@router.get("/projects/running")
+async def list_running_projects(request: Request):
+    """Return list of running project IDs and which is viewed."""
+    lifecycle = request.app.state.lifecycle_manager
+    if not lifecycle:
+        return {"running": [], "viewed_project_id": None}
+    return {
+        "running": lifecycle.get_running_project_ids(),
+        "viewed_project_id": lifecycle.viewed_project_id,
+    }
+
+
+@router.get("/projects/dashboard")
+async def projects_dashboard(request: Request):
+    """Return all projects with aggregated stats for the dashboard."""
+    project_store = request.app.state.project_store
+    lifecycle = request.app.state.lifecycle_manager
+    if not project_store:
+        return {"projects": []}
+
+    from db import get_session_factory
+    from db.repositories.request_history_repo import RequestHistoryRepository
+
+    sf = get_session_factory()
+    history_repo = RequestHistoryRepository(sf)
+
+    projects = project_store.list_projects()
+    project_ids = [p["id"] for p in projects]
+    viewed_id = lifecycle.viewed_project_id if lifecycle else None
+
+    # Get time-windowed stats for all projects
+    all_stats = await history_repo.get_all_projects_stats(project_ids)
+
+    result = []
+    for p in projects:
+        pid = p["id"]
+        is_running = lifecycle.is_running(pid) if lifecycle else False
+
+        # Get agent count from the running project's registry
+        agent_count = 0
+        if lifecycle and is_running:
+            state = lifecycle.get_project_state(pid)
+            if state:
+                agent_count = len(state["registry"].get_all())
+
+        stats = all_stats.get(pid, {"hour": {}, "day": {}, "overall": {}})
+
+        result.append({
+            "id": pid,
+            "name": p.get("name", pid),
+            "description": p.get("description", ""),
+            "created_at": p.get("created_at", ""),
+            "is_running": is_running,
+            "is_viewed": pid == viewed_id,
+            "agent_count": agent_count,
+            "stats": stats,
+        })
+
+    return {"projects": result}
 
 
 @router.get("/projects/active/info")

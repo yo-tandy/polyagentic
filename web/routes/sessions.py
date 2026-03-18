@@ -387,6 +387,32 @@ async def set_provider(agent_id: str, request: Request):
         agent._provider_name = provider_name
         agent._fallback_provider_name = fallback_name
 
+        # Auto-set a sensible default model for the new provider
+        # unless the user explicitly provided one
+        explicit_model = body.get("model")
+        if explicit_model:
+            new_model = explicit_model
+        else:
+            # Map current model to the new provider's default
+            provider_default_models = {
+                "openai": "gpt-4o",
+                "claude-cli": "sonnet",
+                "claude-api": "sonnet",
+                "gemini": "gemini-2.0-flash",
+            }
+            new_model = provider_default_models.get(provider_name, agent.model)
+        agent.model = new_model
+
+        # Persist to DB so it survives server restarts
+        session_store = request.app.state.session_store
+        await session_store.set_provider(agent_id, provider_name, fallback_name)
+        await session_store.set_model(agent_id, new_model)
+
+        # Invalidate the old session — session IDs are provider-specific
+        # (Claude CLI uses UUIDs, API providers use psess_* IDs) and are
+        # not portable across providers.
+        await session_store.invalidate_session(agent_id)
+
     except Exception as e:
         return JSONResponse(
             {"error": f"Failed to create provider: {e}"},
@@ -407,4 +433,5 @@ async def set_provider(agent_id: str, request: Request):
         "agent_id": agent_id,
         "provider": provider_name,
         "fallback_provider": fallback_name,
+        "model": new_model,
     }

@@ -76,6 +76,13 @@ async def init_db(url: str | None = None) -> None:
             "ALTER TABLE tasks ADD COLUMN estimate INTEGER",
             "ALTER TABLE tasks ADD COLUMN started_at VARCHAR(50)",
             "ALTER TABLE tasks ADD COLUMN completed_at VARCHAR(50)",
+            # Scope approval gate
+            "ALTER TABLE tasks ADD COLUMN scope_approved BOOLEAN DEFAULT 0",
+            # Multi-project concurrency
+            "ALTER TABLE projects ADD COLUMN is_running BOOLEAN DEFAULT 0",
+            # Provider persistence per agent session
+            "ALTER TABLE agent_sessions ADD COLUMN provider VARCHAR(20)",
+            "ALTER TABLE agent_sessions ADD COLUMN fallback_provider VARCHAR(20)",
         ]:
             try:
                 await conn.execute(text(stmt))

@@ -16,6 +16,7 @@ const TaskBoard = {
     _phases: [],
     _currentPhaseFilter: null,
     _currentSort: 'priority',
+    _currentSearch: '',
     _lastRenderedTasks: null,
 
     init(containerId) {
@@ -29,6 +30,9 @@ const TaskBoard = {
         this.container.innerHTML = `
             <div class="phase-bar" id="phase-bar"></div>
             <div class="board-controls">
+                <input type="text" class="board-controls__search" id="task-search-input"
+                       placeholder="Search tasks... (id, assignee, reporter, status, title, description)"
+                       autocomplete="off" />
                 <label class="board-controls__label">Sort:</label>
                 <select class="board-controls__select" id="task-sort-select">
                     <option value="priority">Priority</option>
@@ -51,6 +55,21 @@ const TaskBoard = {
         document.getElementById('task-sort-select').addEventListener('change', (e) => {
             this._currentSort = e.target.value;
             if (this._lastRenderedTasks) this.render(this._lastRenderedTasks);
+        });
+
+        const searchInput = document.getElementById('task-search-input');
+        searchInput.addEventListener('input', (e) => {
+            this._currentSearch = e.target.value;
+            if (this._lastRenderedTasks) this.render(this._lastRenderedTasks);
+        });
+        // ESC in search clears it
+        searchInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                searchInput.value = '';
+                this._currentSearch = '';
+                if (this._lastRenderedTasks) this.render(this._lastRenderedTasks);
+                searchInput.blur();
+            }
         });
     },
 
@@ -141,9 +160,14 @@ const TaskBoard = {
         this._lastRenderedTasks = tasks;
 
         // Apply phase filter
-        const filtered = this._currentPhaseFilter
+        let filtered = this._currentPhaseFilter
             ? tasks.filter(t => t.phase_id === this._currentPhaseFilter)
             : tasks;
+
+        // Apply search filter
+        if (this._currentSearch) {
+            filtered = filtered.filter(t => this._matchesSearch(t, this._currentSearch));
+        }
 
         this.columns.forEach(col => {
             const el = document.getElementById(`tasks-${col}`);
@@ -487,16 +511,48 @@ const TaskBoard = {
 
     _renderMarkdown(text) {
         if (!text) return '';
+        let html;
         if (typeof marked !== 'undefined') {
             try {
                 marked.setOptions({ breaks: true, gfm: true });
-                return marked.parse(text);
+                html = marked.parse(text);
             } catch (e) {
                 console.error('Markdown parse error:', e);
-                return this._escapeHtml(text);
+                html = this._escapeHtml(text);
             }
+        } else {
+            html = this._escapeHtml(text);
         }
-        return this._escapeHtml(text);
+        // Make task IDs clickable
+        if (typeof linkifyTaskIds === 'function') {
+            html = linkifyTaskIds(html);
+        }
+        return html;
+    },
+
+    _matchesSearch(task, query) {
+        const q = query.toLowerCase().trim();
+        if (!q) return true;
+
+        // Build a searchable text blob from all relevant fields
+        const fields = [
+            task.id,                           // task_id
+            task.title,                        // subject
+            task.description,                  // description
+            task.assignee,                     // assignee
+            task.created_by,                   // reporter
+            task.status,                       // state
+            task.reviewer,                     // reviewer
+            task.role,                         // role
+            ...(task.labels || []),             // labels
+            task.completion_summary,           // completion notes
+        ].filter(Boolean);
+
+        const blob = fields.join(' ').toLowerCase();
+
+        // Split query into terms — all terms must match
+        const terms = q.split(/\s+/).filter(Boolean);
+        return terms.every(term => blob.includes(term));
     },
 
     _compareTasks(a, b) {

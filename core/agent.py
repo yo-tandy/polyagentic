@@ -1128,6 +1128,11 @@ class Agent:
                     hashlib.md5(prompt_for_hash.encode()).hexdigest()[:12],
                 )
 
+        # Update last_error from result (API providers return errors in result_text,
+        # not via exceptions, so self.last_error wouldn't be set otherwise).
+        if result.is_error and result.result_text:
+            self.last_error = result.result_text[:500]
+
         # Record subprocess stats (all agents, not just session-based ones)
         if self._session_store:
             auto_paused = await self._session_store.record_request(

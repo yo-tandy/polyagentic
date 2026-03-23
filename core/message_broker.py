@@ -272,7 +272,8 @@ class MessageBroker:
                     if not conv:
                         conv = self._conversation_manager.get_by_agent(message.sender)
 
-                if message.task_id and not has_suggested and not conv and self._task_board:
+                force_chat = bool(meta.get("force_chat"))
+                if message.task_id and not has_suggested and not conv and not force_chat and self._task_board:
                     # Route to task progress notes — not the chat window
                     await self._task_board.update_task(
                         message.task_id,

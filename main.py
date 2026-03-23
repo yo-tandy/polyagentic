@@ -324,6 +324,14 @@ class ProjectLifecycleManager:
         # Initialize git
         await git_manager.init_or_validate()
 
+        # Auto-detect github_url from git remote if not set in DB
+        if not project.get("github_url"):
+            remote_url = await git_manager.get_remote_url()
+            if remote_url:
+                await ps.update_project(project_id, github_url=remote_url)
+                project["github_url"] = remote_url
+                logger.info("Auto-detected github_url from remote: %s", remote_url)
+
         # Container manager for worker agents
         container_manager = ContainerManager(workspace_path, worktrees_dir, messages_dir)
         try:
@@ -580,6 +588,17 @@ class ProjectLifecycleManager:
         else:
             # First activation: full lifecycle kickoff
             welcome = f"Project '{project.get('name', project_id)}' has been activated."
+
+            # Inform about linked git repository
+            github_url = project.get("github_url")
+            if github_url:
+                welcome += (
+                    f"\n\nThis project is linked to an existing git repository: {github_url}"
+                    f"\nThe repository has been cloned into the workspace (branch: '{main_branch}')."
+                    "\nA git repository is already set up — do NOT ask Innes to create a new one."
+                    "\nAll agents can read files from the repository using Read, Glob, and Grep tools."
+                )
+
             if project_desc:
                 welcome += f"\n\nProject description:\n{project_desc}"
                 welcome += (

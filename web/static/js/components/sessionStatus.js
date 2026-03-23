@@ -109,7 +109,9 @@ const SessionStatus = {
         const totalDuration = s.total_duration_ms ? `${(s.total_duration_ms / 1000).toFixed(1)}s` : '-';
         const sessionIdShort = isStateless
             ? 'none (stateless)'
-            : (s.session_id ? s.session_id.substring(0, 12) + '...' : 'none');
+            : (s.session_id
+                ? (s.session_id.startsWith('psess_') ? 'api-' : 'cli-') + s.session_id.replace(/^psess_/, '').substring(0, 8) + '...'
+                : 'none');
 
         const resetBtn = `<button class="btn btn--sm btn--muted session-action-btn" data-agent-id="${s.agent_id}" data-action="reset">Reset</button>`;
 

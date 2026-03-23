@@ -258,8 +258,9 @@ const App = {
                 break;
 
             case 'project_switched':
-                // Full reload on project switch
-                location.reload();
+                // Full reload on project switch (skip beforeunload warning)
+                ProjectSelector._skipUnloadWarning = true;
+                window.location.reload();
                 break;
 
             case 'mcp_request':

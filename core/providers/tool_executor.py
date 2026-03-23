@@ -468,16 +468,21 @@ ACTION_TOOL_DEFINITIONS: dict[str, dict] = {
     "respond_to_user": {
         "name": "respond_to_user",
         "description": (
-            "Send a message to the user. Use for status updates, answers, "
-            "deliverables, and questions."
+            "Send a message to the user. Always include suggested_answers "
+            "with 2-3 short reply options when asking a question."
         ),
         "parameters": {
             "message": {
                 "type": "string",
                 "description": "The message content to send to the user",
             },
+            "suggested_answers": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "2-3 short quick-reply options for the user (REQUIRED when asking questions)",
+            },
         },
-        "required": ["message"],
+        "required": ["message", "suggested_answers"],
     },
     "delegate": {
         "name": "delegate",
@@ -825,10 +830,17 @@ def build_action_schemas_openai(allowed_actions: set[str] | None) -> list[dict]:
 
         properties = {}
         for pname, pinfo in defn["parameters"].items():
-            properties[pname] = {
+            prop: dict = {
                 "type": pinfo["type"],
                 "description": pinfo["description"],
             }
+            # Array types need an items schema
+            if pinfo["type"] == "array" and "items" in pinfo:
+                prop["items"] = pinfo["items"]
+            # Enum support
+            if "enum" in pinfo:
+                prop["enum"] = pinfo["enum"]
+            properties[pname] = prop
 
         tools.append({
             "type": "function",
@@ -859,10 +871,15 @@ def build_action_schemas_anthropic(allowed_actions: set[str] | None) -> list[dic
 
         properties = {}
         for pname, pinfo in defn["parameters"].items():
-            properties[pname] = {
+            prop: dict = {
                 "type": pinfo["type"],
                 "description": pinfo["description"],
             }
+            if pinfo["type"] == "array" and "items" in pinfo:
+                prop["items"] = pinfo["items"]
+            if "enum" in pinfo:
+                prop["enum"] = pinfo["enum"]
+            properties[pname] = prop
 
         tools.append({
             "name": defn["name"],
@@ -891,10 +908,17 @@ def build_action_schemas_gemini(allowed_actions: set[str] | None) -> list[dict]:
         properties = {}
         for pname, pinfo in defn["parameters"].items():
             gtype = pinfo["type"].upper()
-            properties[pname] = {
+            prop: dict = {
                 "type": gtype,
                 "description": pinfo["description"],
             }
+            if pinfo["type"] == "array" and "items" in pinfo:
+                prop["items"] = {
+                    "type": pinfo["items"]["type"].upper(),
+                }
+            if "enum" in pinfo:
+                prop["enum"] = pinfo["enum"]
+            properties[pname] = prop
 
         declarations.append({
             "name": defn["name"],

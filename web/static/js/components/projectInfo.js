@@ -67,6 +67,18 @@ const ProjectInfo = {
                         <span class="project-info__label">Description</span>
                         <div class="project-info__description">${this._esc(p.description)}</div>
                     </div>` : ''}
+                    <div class="project-info__meta-row" id="project-info-repo-row">
+                        <span class="project-info__label">Repository</span>
+                        <span class="project-info__value" id="project-info-repo-value">
+                            ${p.github_url
+                                ? `<a href="${this._esc(p.github_url)}" target="_blank" rel="noopener" class="project-info__repo-link">${this._esc(p.github_url.replace(/^https?:\/\//, ''))}</a>`
+                                : `<span class="project-info__repo-none">
+                                    <input type="url" id="project-info-repo-input" placeholder="https://github.com/user/repo.git" class="project-info__repo-input">
+                                    <button class="btn btn--sm btn--primary" id="project-info-repo-save">Link</button>
+                                  </span>`
+                            }
+                        </span>
+                    </div>
                 </div>
             </div>
 
@@ -166,6 +178,48 @@ const ProjectInfo = {
                 </table>
             </div>
         `;
+
+        // Bind repo link button
+        const repoSaveBtn = document.getElementById('project-info-repo-save');
+        if (repoSaveBtn) {
+            repoSaveBtn.addEventListener('click', () => this._linkRepo(p.id));
+        }
+        const repoInput = document.getElementById('project-info-repo-input');
+        if (repoInput) {
+            repoInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') this._linkRepo(p.id);
+            });
+        }
+    },
+
+    async _linkRepo(projectId) {
+        const input = document.getElementById('project-info-repo-input');
+        const valueEl = document.getElementById('project-info-repo-value');
+        const url = input?.value?.trim();
+        if (!url) return;
+
+        const btn = document.getElementById('project-info-repo-save');
+        if (btn) { btn.disabled = true; btn.textContent = 'Linking...'; }
+
+        try {
+            const res = await fetch(`/api/projects/${projectId}/link-repo`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ git_url: url }),
+            });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                alert(err.error || 'Failed to link repository');
+                if (btn) { btn.disabled = false; btn.textContent = 'Link'; }
+                return;
+            }
+            // Replace input with link
+            const shortUrl = url.replace(/^https?:\/\//, '');
+            valueEl.innerHTML = `<a href="${this._esc(url)}" target="_blank" rel="noopener" class="project-info__repo-link">${this._esc(shortUrl)}</a>`;
+        } catch (e) {
+            alert('Failed to link repository');
+            if (btn) { btn.disabled = false; btn.textContent = 'Link'; }
+        }
     },
 
     _fmtDuration(ms) {

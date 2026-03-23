@@ -35,6 +35,35 @@ class GitManager:
             stderr.decode(errors="replace").strip(),
         )
 
+    async def get_remote_url(self, remote: str = "origin") -> str | None:
+        """Return the URL of a git remote, or None if not set."""
+        rc, out, _ = await self._run_git("remote", "get-url", remote)
+        return out.strip() if rc == 0 and out.strip() else None
+
+    async def clone_repo(self, url: str) -> str:
+        """Clone a remote repository into the workspace directory.
+
+        The workspace directory should be empty (just created by project_store).
+        Returns the detected default branch name (e.g. 'main' or 'master').
+        """
+        self.workspace.mkdir(parents=True, exist_ok=True)
+
+        rc, out, err = await self._run_git("clone", url, ".")
+        if rc != 0:
+            raise RuntimeError(f"Failed to clone repository: {err}")
+
+        logger.info("Cloned %s into %s", url, self.workspace)
+
+        # Detect the default branch
+        rc, branch_out, _ = await self._run_git(
+            "rev-parse", "--abbrev-ref", "HEAD",
+        )
+        detected_branch = branch_out.strip() if rc == 0 and branch_out.strip() else "main"
+        self.main_branch = detected_branch
+        logger.info("Detected default branch: %s", detected_branch)
+
+        return detected_branch
+
     async def init_or_validate(self):
         self.workspace.mkdir(parents=True, exist_ok=True)
         git_dir = self.workspace / ".git"

@@ -154,6 +154,12 @@
                         <textarea id="new-project-description" rows="4" placeholder="Describe your project..."></textarea>
                     </div>
                     <div class="form-group">
+                        <label>Git Repository (optional)</label>
+                        <input type="url" id="new-project-git-url"
+                               placeholder="https://github.com/user/repo.git">
+                        <div class="form-hint">Link an existing repository. Leave blank to start fresh.</div>
+                    </div>
+                    <div class="form-group">
                         <label>Documents (optional)</label>
                         <div class="upload-area" id="new-project-uploads">
                             <input type="file" id="new-project-files" multiple
@@ -162,6 +168,12 @@
                             <div class="upload-area__hint">PDF, DOCX, TXT, PNG, JPG — max 20MB each</div>
                         </div>
                     </div>
+                    <details class="advanced-settings" id="new-project-advanced">
+                        <summary class="advanced-settings__toggle">Advanced Settings</summary>
+                        <div class="advanced-settings__body" id="new-project-agent-models">
+                            <!-- Populated dynamically by JS -->
+                        </div>
+                    </details>
                     <button type="submit" class="btn btn--primary">Create Project</button>
                     <div id="new-project-status" class="form-status"></div>
                 </form>

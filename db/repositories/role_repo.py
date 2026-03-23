@@ -55,7 +55,7 @@ DEFAULT_ROLE_SEEDS: list[dict] = [
     {
         "role_id": "manager",
         "prompt_source": "manny",
-        "allowed_tools": "none",
+        "allowed_tools": "readonly",
         "use_session": False,
         "stateless": True,
         "max_task_context_items": None,
@@ -217,6 +217,8 @@ class RoleRepository(BaseRepository):
             count = result.scalar() or 0
             if count > 0:
                 logger.info("Roles table already seeded (%d rows), skipping", count)
+                # One-time migration: upgrade manager tools from "none" to "readonly"
+                await self._upgrade_manager_tools(tenant_id)
                 return 0
 
         # Import here so prompt_loader is only needed at seed time
@@ -259,3 +261,17 @@ class RoleRepository(BaseRepository):
             provider=row.provider or "claude-cli",
             fallback_provider=row.fallback_provider,
         )
+
+    async def _upgrade_manager_tools(self, tenant_id: str = "default") -> None:
+        """One-time migration: manager role from 'none' to 'readonly'."""
+        async with self._session() as session:
+            stmt = select(AgentRole).where(
+                AgentRole.tenant_id == tenant_id,
+                AgentRole.role_id == "manager",
+            )
+            result = await session.execute(stmt)
+            role = result.scalar_one_or_none()
+            if role and role.allowed_tools == "none":
+                role.allowed_tools = "readonly"
+                await session.commit()
+                logger.info("Upgraded manager role tools from 'none' to 'readonly'")

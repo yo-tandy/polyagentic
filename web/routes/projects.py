@@ -17,9 +17,16 @@ def _get_user(request: Request) -> dict:
     return getattr(request.state, "user", {})
 
 
+class AgentModelConfig(BaseModel):
+    provider: str = "claude-cli"
+    model: str = "sonnet"
+
+
 class CreateProjectRequest(BaseModel):
     name: str
     description: str = ""
+    agent_models: dict[str, AgentModelConfig] = {}  # {agent_id: {provider, model}}
+    git_url: str = ""  # optional: clone existing repo into workspace
 
 
 @router.get("/projects")
@@ -50,12 +57,16 @@ async def create_project(body: CreateProjectRequest, request: Request):
         return JSONResponse({"error": "Project store not available"}, status_code=503)
     user = _get_user(request)
     try:
-        project = await project_store.create_project(body.name, body.description)
+        project = await project_store.create_project(
+            body.name, body.description, git_url=body.git_url,
+        )
         # Track the creating user
         project["created_by"] = user.get("id", "user")
         return {"status": "created", "project": project}
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
+    except RuntimeError as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 @router.get("/projects/active")
@@ -89,6 +100,32 @@ async def activate_project(project_id: str, request: Request):
         return JSONResponse({"error": str(e)}, status_code=400)
     except Exception as e:
         logger.exception("Failed to activate project %s", project_id)
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@router.post("/projects/{project_id}/link-repo")
+async def link_repo(project_id: str, request: Request):
+    """Link a git repository to an existing project (stores URL only, no clone)."""
+    project_store = request.app.state.project_store
+    if not project_store:
+        return JSONResponse({"error": "Project store not available"}, status_code=503)
+
+    project = project_store.get_project(project_id)
+    if not project:
+        return JSONResponse({"error": f"Project '{project_id}' not found"}, status_code=404)
+
+    body = await request.json()
+    git_url = body.get("git_url", "").strip()
+    if not git_url:
+        return JSONResponse({"error": "git_url is required"}, status_code=400)
+
+    try:
+        updated = await project_store.update_project(project_id, github_url=git_url)
+        if not updated:
+            return JSONResponse({"error": "Failed to update project"}, status_code=500)
+        return {"status": "linked", "project": updated}
+    except Exception as e:
+        logger.exception("Failed to link repo to project %s", project_id)
         return JSONResponse({"error": str(e)}, status_code=500)
 
 

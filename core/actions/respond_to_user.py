@@ -33,7 +33,10 @@ class RespondToUser(BaseAction):
         ctx: ActionContext,
     ) -> list[Message]:
         suggested = action.get("suggested_answers", [])
-        meta: dict[str, Any] = {}
+        meta: dict[str, Any] = {
+            # Always deliver to chat — never route to task progress notes.
+            "force_chat": True,
+        }
         if suggested:
             meta["suggested_answers"] = suggested[:3]
         return [Message(
@@ -43,5 +46,5 @@ class RespondToUser(BaseAction):
             content=action.get("message", ""),
             task_id=original_msg.task_id,
             parent_message_id=original_msg.id,
-            metadata=meta if meta else None,
+            metadata=meta,
         )]

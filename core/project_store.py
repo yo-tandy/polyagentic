@@ -39,8 +39,14 @@ class ProjectStore:
 
     # ── CRUD ──
 
-    async def create_project(self, name: str, description: str = "") -> dict:
-        """Create a new project with isolated directory structure."""
+    async def create_project(
+        self, name: str, description: str = "", git_url: str = "",
+    ) -> dict:
+        """Create a new project with isolated directory structure.
+
+        If *git_url* is provided the repository is cloned into the
+        workspace directory and the detected default branch is stored.
+        """
         project_id = _slugify(name)
         if not project_id:
             raise ValueError("Project name must contain at least one alphanumeric character")
@@ -59,13 +65,34 @@ class ProjectStore:
         for subdir in ["messages", "workspace", "worktrees", "memory", "uploads"]:
             (project_dir / subdir).mkdir(parents=True, exist_ok=True)
 
+        # If git_url provided, clone the repository into workspace
+        extra_kwargs: dict = {}
+        if git_url and git_url.strip():
+            import shutil
+            from core.git_manager import GitManager
+
+            workspace = project_dir / "workspace"
+            git_mgr = GitManager(workspace)
+            try:
+                detected_branch = await git_mgr.clone_repo(git_url.strip())
+                extra_kwargs["github_url"] = git_url.strip()
+                extra_kwargs["main_branch"] = detected_branch
+            except RuntimeError:
+                # Clean up on clone failure
+                shutil.rmtree(project_dir, ignore_errors=True)
+                raise
+
         # Write to DB
         rec = await self._repo.create(
             id=project_id, name=name, description=description,
+            **extra_kwargs,
         )
         project_meta = self._project_to_dict(rec)
         self._cache.append(project_meta)
-        logger.info("Created project '%s' (id: %s)", name, project_id)
+        logger.info(
+            "Created project '%s' (id: %s, git_url: %s)",
+            name, project_id, extra_kwargs.get("github_url", "none"),
+        )
         return project_meta
 
     def list_projects(self) -> list[dict]:

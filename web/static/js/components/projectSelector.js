@@ -5,6 +5,31 @@ const ProjectSelector = {
     _currentProjectId: null,
     _pendingSwitchId: null,
 
+    // Fixed agents shown in advanced settings (display name → agent_id)
+    FIXED_AGENTS: [
+        { id: 'manny',  label: 'Dev Manager (Manny)' },
+        { id: 'jerry',  label: 'Project Manager (Jerry)' },
+        { id: 'perry',  label: 'Product Manager (Perry)' },
+        { id: 'innes',  label: 'Integrator (Innes)' },
+        { id: 'rory',   label: 'Robot Resources (Rory)' },
+    ],
+
+    PROVIDERS: ['claude-cli', 'claude-api', 'openai', 'gemini'],
+
+    PROVIDER_MODELS: {
+        'claude-cli':  ['sonnet', 'opus', 'haiku'],
+        'claude-api':  ['sonnet', 'opus', 'haiku'],
+        'openai':      ['gpt-4o', 'gpt-4o-mini', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4.1-nano', 'o3', 'o3-mini', 'o4-mini'],
+        'gemini':      ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-2.0-flash-lite'],
+    },
+
+    PROVIDER_DEFAULTS: {
+        'claude-cli': 'sonnet',
+        'claude-api': 'sonnet',
+        'openai':     'gpt-4o',
+        'gemini':     'gemini-2.0-flash',
+    },
+
     init() {
         this.selectEl = document.getElementById('project-select');
         this.newBtn = document.getElementById('new-project-btn');
@@ -79,10 +104,10 @@ const ProjectSelector = {
                 if (res.ok && oldId) {
                     await fetch(`/api/projects/${oldId}/stop`, { method: 'POST' });
                 }
-                location.reload();
+                this._intentionalReload();
             } catch (e) {
                 console.error('Failed to switch project:', e);
-                location.reload();
+                this._intentionalReload();
             }
         });
     },
@@ -122,7 +147,7 @@ const ProjectSelector = {
                 try {
                     const res = await fetch(`/api/projects/${this._currentProjectId}/activate`, { method: 'POST' });
                     if (res.ok) {
-                        location.reload();
+                        this._intentionalReload();
                     } else {
                         btn.disabled = false;
                         btn.textContent = 'Re-activate Project';
@@ -136,15 +161,14 @@ const ProjectSelector = {
         }
     },
 
+    _intentionalReload() {
+        this._skipUnloadWarning = true;
+        window.location.reload();
+    },
+
     _initBeforeUnload() {
-        window.addEventListener('beforeunload', (e) => {
-            // Check if any projects are running
-            const runningProjects = this.projects.filter(p => p.is_running);
-            if (runningProjects.length > 0) {
-                e.preventDefault();
-                e.returnValue = 'Agents are still running. Are you sure you want to leave?';
-            }
-        });
+        // Intentionally empty — agents keep running server-side regardless
+        // of browser state, so the "leave site?" warning is unnecessary.
     },
 
     async _handleSwitch(targetId) {
@@ -226,7 +250,7 @@ const ProjectSelector = {
                 }
                 return;
             }
-            location.reload();
+            this._intentionalReload();
         } catch (err) {
             console.error('Failed to switch project:', err);
             if (this.selectEl) this.selectEl.disabled = false;
@@ -269,6 +293,65 @@ const ProjectSelector = {
         if (modal) modal.classList.add('active');
         const nameInput = document.getElementById('new-project-name');
         if (nameInput) nameInput.focus();
+        this._populateAgentModels();
+    },
+
+    _populateAgentModels() {
+        const container = document.getElementById('new-project-agent-models');
+        if (!container) return;
+
+        container.innerHTML = `
+            <p class="advanced-settings__hint">Choose the provider and model for each agent. Defaults to Claude CLI / Sonnet.</p>
+            ${this.FIXED_AGENTS.map(agent => `
+                <div class="agent-model-row" data-agent-id="${agent.id}">
+                    <span class="agent-model-row__label">${agent.label}</span>
+                    <select class="agent-model-row__provider" data-agent-id="${agent.id}">
+                        ${this.PROVIDERS.map(p =>
+                            `<option value="${p}"${p === 'claude-cli' ? ' selected' : ''}>${p}</option>`
+                        ).join('')}
+                    </select>
+                    <select class="agent-model-row__model" data-agent-id="${agent.id}">
+                        ${this.PROVIDER_MODELS['claude-cli'].map(m =>
+                            `<option value="${m}"${m === 'sonnet' ? ' selected' : ''}>${m}</option>`
+                        ).join('')}
+                    </select>
+                </div>
+            `).join('')}
+        `;
+
+        // Bind provider change → update model dropdown
+        container.querySelectorAll('.agent-model-row__provider').forEach(sel => {
+            sel.addEventListener('change', () => {
+                const agentId = sel.dataset.agentId;
+                const provider = sel.value;
+                const modelSel = container.querySelector(`.agent-model-row__model[data-agent-id="${agentId}"]`);
+                if (!modelSel) return;
+                const models = this.PROVIDER_MODELS[provider] || this.PROVIDER_MODELS['claude-cli'];
+                const defaultModel = this.PROVIDER_DEFAULTS[provider] || models[0];
+                modelSel.innerHTML = models.map(m =>
+                    `<option value="${m}"${m === defaultModel ? ' selected' : ''}>${m}</option>`
+                ).join('');
+            });
+        });
+    },
+
+    _getAgentModelSettings() {
+        const container = document.getElementById('new-project-agent-models');
+        if (!container) return {};
+        const settings = {};
+        this.FIXED_AGENTS.forEach(agent => {
+            const provSel = container.querySelector(`.agent-model-row__provider[data-agent-id="${agent.id}"]`);
+            const modelSel = container.querySelector(`.agent-model-row__model[data-agent-id="${agent.id}"]`);
+            if (provSel && modelSel) {
+                const provider = provSel.value;
+                const model = modelSel.value;
+                // Only include non-default settings
+                if (provider !== 'claude-cli' || model !== 'sonnet') {
+                    settings[agent.id] = { provider, model };
+                }
+            }
+        });
+        return settings;
     },
 
     hideNewProjectModal() {
@@ -278,17 +361,23 @@ const ProjectSelector = {
         if (form) form.reset();
         const status = document.getElementById('new-project-status');
         if (status) status.textContent = '';
+        // Collapse advanced settings
+        const details = document.getElementById('new-project-advanced');
+        if (details) details.removeAttribute('open');
     },
 
     async createProject() {
         const nameInput = document.getElementById('new-project-name');
         const descInput = document.getElementById('new-project-description');
+        const gitUrlInput = document.getElementById('new-project-git-url');
         const fileInput = document.getElementById('new-project-files');
         const statusEl = document.getElementById('new-project-status');
 
         const name = nameInput?.value?.trim();
         const description = descInput?.value?.trim();
+        const gitUrl = gitUrlInput?.value?.trim() || '';
         const files = fileInput?.files || [];
+        const agentModels = this._getAgentModelSettings();
 
         if (!name) {
             if (statusEl) {
@@ -299,7 +388,7 @@ const ProjectSelector = {
         }
 
         if (statusEl) {
-            statusEl.textContent = 'Creating project...';
+            statusEl.textContent = gitUrl ? 'Creating project and cloning repository...' : 'Creating project...';
             statusEl.className = 'form-status form-status--info';
         }
 
@@ -307,7 +396,12 @@ const ProjectSelector = {
             const res = await fetch('/api/projects', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name, description: description || '' }),
+                body: JSON.stringify({
+                    name,
+                    description: description || '',
+                    agent_models: agentModels,
+                    git_url: gitUrl,
+                }),
             });
 
             if (!res.ok) {
@@ -321,13 +415,38 @@ const ProjectSelector = {
 
             const data = await res.json();
 
+            if (statusEl) {
+                statusEl.textContent = 'Activating project...';
+                statusEl.className = 'form-status form-status--info';
+            }
+
             const actRes = await fetch(`/api/projects/${data.project.id}/activate`, {
                 method: 'POST',
             });
             if (!actRes.ok) {
                 console.error('Failed to activate project');
-                location.reload();
+                this._intentionalReload();
                 return;
+            }
+
+            // Apply agent model/provider overrides after activation
+            const modelEntries = Object.entries(agentModels);
+            if (modelEntries.length > 0) {
+                if (statusEl) {
+                    statusEl.textContent = 'Configuring agent models...';
+                    statusEl.className = 'form-status form-status--info';
+                }
+                for (const [agentId, cfg] of modelEntries) {
+                    try {
+                        await fetch(`/api/sessions/${agentId}/provider`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ provider: cfg.provider }),
+                        });
+                    } catch (e) {
+                        console.warn(`Failed to set provider for ${agentId}:`, e);
+                    }
+                }
             }
 
             if (files.length > 0) {
@@ -344,7 +463,7 @@ const ProjectSelector = {
                 }
             }
 
-            location.reload();
+            this._intentionalReload();
         } catch (err) {
             console.error('Failed to create project:', err);
             if (statusEl) {

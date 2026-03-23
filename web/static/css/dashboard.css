@@ -2110,6 +2110,87 @@
     gap: 12px;
 }
 
+/* ── Advanced Settings (collapsible) ── */
+
+.advanced-settings {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.advanced-settings__toggle {
+    font-family: var(--font);
+    font-size: 11px;
+    font-weight: 600;
+    padding: 8px 12px;
+    cursor: pointer;
+    color: var(--text-muted);
+    list-style: none;
+    user-select: none;
+}
+
+.advanced-settings__toggle::-webkit-details-marker {
+    display: none;
+}
+
+.advanced-settings__toggle::before {
+    content: '\25B8';
+    display: inline-block;
+    margin-right: 6px;
+    transition: transform 0.15s;
+}
+
+.advanced-settings[open] > .advanced-settings__toggle::before {
+    transform: rotate(90deg);
+}
+
+.advanced-settings__body {
+    padding: 8px 12px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    border-top: 1px solid var(--border);
+}
+
+.advanced-settings__hint {
+    font-size: 10px;
+    color: var(--text-muted);
+    margin: 0 0 4px 0;
+}
+
+.agent-model-row {
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+    gap: 6px;
+    align-items: center;
+}
+
+.agent-model-row__label {
+    font-size: 11px;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.agent-model-row__provider,
+.agent-model-row__model {
+    font-family: var(--font);
+    font-size: 11px;
+    padding: 4px 6px;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    outline: none;
+    min-width: 100px;
+}
+
+.agent-model-row__provider:focus,
+.agent-model-row__model:focus {
+    border-color: var(--accent);
+}
+
 .btn {
     font-family: var(--font);
     font-size: 12px;
@@ -2624,6 +2705,39 @@
     padding: 8px;
     background: var(--surface-hover);
     border-radius: 4px;
+}
+
+.project-info__repo-link {
+    color: var(--accent);
+    text-decoration: none;
+    font-size: 12px;
+    word-break: break-all;
+}
+
+.project-info__repo-link:hover {
+    text-decoration: underline;
+}
+
+.project-info__repo-none {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+
+.project-info__repo-input {
+    font-family: var(--font);
+    font-size: 11px;
+    padding: 4px 8px;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    outline: none;
+    width: 260px;
+}
+
+.project-info__repo-input:focus {
+    border-color: var(--accent);
 }
 
 .project-info__stats-grid {
